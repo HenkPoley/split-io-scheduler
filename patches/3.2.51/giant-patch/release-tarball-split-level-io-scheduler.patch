@@ -1,0 +1,2997 @@
+diff --git a/.gitignore b/.gitignore
+index 57af07c..139b71d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -84,3 +84,5 @@ GTAGS
+ *.orig
+ *~
+ \#*#
++/build.sh
++/install.sh
+diff --git a/block/Makefile b/block/Makefile
+index 514c6e4..003bc70 100644
+--- a/block/Makefile
++++ b/block/Makefile
+@@ -5,7 +5,8 @@
+ obj-$(CONFIG_BLOCK) := elevator.o blk-core.o blk-tag.o blk-sysfs.o \
+ 			blk-flush.o blk-settings.o blk-ioc.o blk-map.o \
+ 			blk-exec.o blk-merge.o blk-softirq.o blk-timeout.o \
+-			blk-iopoll.o blk-lib.o ioctl.o genhd.o scsi_ioctl.o
++			blk-iopoll.o blk-lib.o ioctl.o genhd.o scsi_ioctl.o \
++            cause_tags.o
+ 
+ obj-$(CONFIG_BLK_DEV_BSG)	+= bsg.o
+ obj-$(CONFIG_BLK_DEV_BSGLIB)	+= bsg-lib.o
+diff --git a/block/blk-core.c b/block/blk-core.c
+index 49d9e91..4574b2d 100644
+--- a/block/blk-core.c
++++ b/block/blk-core.c
+@@ -136,6 +136,7 @@ void blk_rq_init(struct request_queue *q, struct request *rq)
+ 	rq->__sector = (sector_t) -1;
+ 	INIT_HLIST_NODE(&rq->hash);
+ 	RB_CLEAR_NODE(&rq->rb_node);
++	RB_CLEAR_NODE(&rq->expire_rb_node);
+ 	rq->cmd = rq->__cmd;
+ 	rq->cmd_len = BLK_MAX_CDB;
+ 	rq->tag = -1;
+diff --git a/block/blk-lib.c b/block/blk-lib.c
+index 2b461b4..088b642 100644
+--- a/block/blk-lib.c
++++ b/block/blk-lib.c
+@@ -6,6 +6,7 @@
+ #include <linux/bio.h>
+ #include <linux/blkdev.h>
+ #include <linux/scatterlist.h>
++#include <linux/cause_tags.h>
+ 
+ #include "blk.h"
+ 
+@@ -155,6 +156,9 @@ int blkdev_issue_zeroout(struct block_device *bdev, sector_t sector,
+ 		while (nr_sects != 0) {
+ 			sz = min((sector_t) PAGE_SIZE >> 9 , nr_sects);
+ 			ret = bio_add_page(bio, ZERO_PAGE(0), sz << 9, 0);
++
++			add_causes_zero_to_bio(bio, sz << 9);
++
+ 			nr_sects -= ret >> 9;
+ 			sector += ret >> 9;
+ 			if (ret < (sz << 9))
+diff --git a/block/cause_tags.c b/block/cause_tags.c
+new file mode 100644
+index 0000000..d6c4300
+--- /dev/null
++++ b/block/cause_tags.c
+@@ -0,0 +1,364 @@
++#include <linux/slab.h>
++#include <linux/sched.h>
++#include <linux/cause_tags.h>
++#include <linux/blk_types.h>
++#include <linux/blkdev.h>
++#include <linux/buffer_head.h>
++#include <linux/workqueue.h>
++#include <linux/module.h>
++#include <linux/elevator.h>
++
++#ifndef DISABLE_CAUSES
++
++static atomic_t cause_list_alloc = ATOMIC_INIT(0);
++static atomic_t cause_list_free = ATOMIC_INIT(0);
++static atomic_t cause_item_alloc = ATOMIC_INIT(0);
++static atomic_t cause_item_free = ATOMIC_INIT(0);
++
++void cause_list_debug(void) {
++	int alloc = atomic_read(&cause_list_alloc);
++	int free = atomic_read(&cause_list_free);
++	printk(KERN_INFO "cause_list alloc=%d, free=%d",
++		   alloc, free);
++}
++EXPORT_SYMBOL(cause_list_debug);
++
++#ifndef DISABLE_CAUSES_DEBUG
++// return 1 if magic is wrong or mem is bad
++int cause_list_check(struct cause_list *cl) {
++	char tmp;
++	if (!cl) {
++		WARN_ON("cannot check_magic on NULL causes");
++		return 1;
++	}
++	if (probe_kernel_address(cl, tmp)) {
++		WARN_ON("invalid causes address");
++		return 1;
++	}
++	if (cl->magic == CAUSES_MAGIC_BAD) {
++		WARN_ON("causes was kfreed'd");
++		return 1;
++	}
++	if (cl->magic != CAUSES_MAGIC_GOOD) {
++		WARN_ON("causes is corrupt");
++		return 1;
++	}
++	return 0;
++}
++EXPORT_SYMBOL(cause_list_check);
++#endif
++
++struct cause_list* __new_cause_list(int line) {
++	struct cause_list* cl = kmalloc(sizeof(*cl), GFP_ATOMIC);
++	if (cl != NULL) {
++		memset(cl, 0, sizeof(*cl));
++#ifndef DISABLE_CAUSES_ALLOC_COUNTERS
++		atomic_inc(&cause_list_alloc);
++#endif
++#ifndef DISABLE_CAUSES_DEBUG
++		cl->magic = CAUSES_MAGIC_GOOD;
++		cl->new_line = line;
++#endif
++		set_cause_list_type(cl, SPLIT_UNKNOWN);
++		INIT_LIST_HEAD(&cl->items);
++		cl->inode = NULL;
++		cl->private = -1;
++		kref_init(&cl->refcount);
++	}
++	return cl;
++}
++EXPORT_SYMBOL(__new_cause_list);
++
++static void free_cause_list(struct kref *ref) {
++	struct cause_list* cl;
++	struct list_head *cause_node;
++	struct list_head *tmp;
++	struct request_queue *q = NULL;
++	elevator_causes_free_fn *causes_free_fn = NULL;
++	cl = container_of(ref, struct cause_list, refcount);
++
++	if (cause_list_check(cl))
++		return;
++
++	// notify sched
++	q = cl->callback_q;
++	if (q) {
++		spin_lock_irq(q->queue_lock);
++		if(q->sched_uniq == cl->sched_uniq){
++
++			causes_free_fn = q->elevator->elevator_type->ops.elevator_causes_free_fn;
++			if (causes_free_fn) {
++				causes_free_fn(q, cl);
++			}
++		}
++		spin_unlock_irq(q->queue_lock);
++	}
++
++	// cleanup list
++	list_for_each_safe(cause_node, tmp, &cl->items) {
++		struct io_cause *cause;
++		cause = list_entry(cause_node, struct io_cause, list);
++		list_del(cause_node);
++		kfree(cause);
++		atomic_inc(&cause_item_free);
++	}
++
++#ifndef DISABLE_CAUSES_ALLOC_COUNTERS
++	atomic_inc(&cause_list_free);
++#endif
++#ifndef DISABLE_CAUSES_DEBUG
++	cl->magic = CAUSES_MAGIC_BAD;
++#endif
++	kfree(cl);
++}
++EXPORT_SYMBOL(free_cause_list);
++
++struct cause_list* get_cause_list(struct cause_list* cause_list) {
++	if (cause_list == NULL)
++		return NULL;
++	if (cause_list_check(cause_list))
++		return NULL;
++	kref_get(&cause_list->refcount);
++	return cause_list;
++}
++EXPORT_SYMBOL(get_cause_list);
++
++void put_cause_list(struct cause_list* cause_list) {
++	if (!cause_list)
++		return;
++	if (cause_list_check(cause_list))
++		return;
++	kref_put(&cause_list->refcount, &free_cause_list);
++}
++EXPORT_SYMBOL(put_cause_list);
++
++struct put_cause_list_work {
++	struct cause_list* cause_list;
++	struct work_struct work;
++};
++
++void do_put_cause_list_work(struct work_struct *work){
++	struct put_cause_list_work *put_cause_list_work = container_of(work, struct put_cause_list_work, work);
++	if (cause_list_check(put_cause_list_work->cause_list))
++		return;
++	put_cause_list(put_cause_list_work->cause_list);
++	kfree(put_cause_list_work);
++}
++
++void put_cause_list_safe(struct cause_list* cause_list){
++	struct put_cause_list_work *put_cause_list_work = kmalloc(sizeof(*put_cause_list_work), GFP_ATOMIC);
++	if (!put_cause_list_work) {
++		WARN_ON("could not kmalloc causes safe put struct");
++		return;
++	}
++	if (cause_list_check(cause_list))
++		return;
++
++	put_cause_list_work->cause_list = cause_list;
++	INIT_WORK(&put_cause_list_work->work, do_put_cause_list_work);
++	schedule_work(&put_cause_list_work->work);
++}
++EXPORT_SYMBOL(put_cause_list_safe);
++
++int __cause_list_add(struct cause_list* cause_list,
++					 int account_id) {
++	int already_exists = 0;
++	struct list_head *cause_node;
++    struct io_cause *cause;
++	int rv = 0;
++
++	if (cause_list == NULL)
++		return 0;
++
++	if (cause_list_check(cause_list))
++		return 0;
++
++	// have we already listed this cause?
++    list_for_each(cause_node, &cause_list->items) {
++        cause = list_entry(cause_node, struct io_cause, list);
++		if (cause->account_id == account_id) {
++			already_exists = 1;
++			break;
++		}
++	}
++	if (!already_exists) {
++		cause = kmalloc(sizeof(*cause), GFP_ATOMIC);
++		atomic_inc(&cause_item_alloc);
++		if (cause != NULL) {
++			INIT_LIST_HEAD(&cause->list);
++			cause->account_id = account_id;
++			list_add_tail(&cause->list, &cause_list->items);
++			cause_list->item_count++;
++			rv = 1;
++		}
++	}
++	return rv;
++}
++EXPORT_SYMBOL(__cause_list_add);
++
++// either adds task (normal case) or copies tasks (proxy case)
++//
++// return number of new items added
++int cause_list_add(struct cause_list** cause_list,
++				   struct task_struct* task) {
++	if (!*cause_list)
++		*cause_list = new_cause_list();
++
++	if (task->causes) {
++		// proxy for other causes
++		return cause_list_copy(task->causes, cause_list);
++	} else {
++		return __cause_list_add(*cause_list, atomic_read(&task->account_id));
++	}
++}
++EXPORT_SYMBOL(cause_list_add);
++
++int cause_list_copy(struct cause_list* from,
++					struct cause_list** to) {
++	struct list_head *cause_node;
++    struct io_cause *cause;
++	int rv = 0;
++
++	if (!*to)
++		*to = new_cause_list();
++
++	if (from == NULL || *to == NULL)
++		return rv;
++
++	if (cause_list_check(from))
++		return 0;
++	if (cause_list_check(*to))
++		return 0;
++
++    list_for_each(cause_node, &from->items) {
++        cause = list_entry(cause_node, struct io_cause, list);
++		rv += __cause_list_add(*to, cause->account_id);
++	}
++	return rv;
++}
++EXPORT_SYMBOL(cause_list_copy);
++
++void add_causes_zero_to_bio(struct bio *bio, int size) {
++	struct cause_list* causes;
++	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 3;
++
++	if (!bio->cll)
++		bio->cll = new_cause_list_list(max_pages_per_bio);
++	if (!bio->cll)
++		return;
++
++	causes = new_cause_list();
++	if (!causes)
++		return;
++
++	set_cause_list_type(causes, SPLIT_ZERO);
++	causes->size = size;
++	cause_list_list_add(bio->cll, causes);
++	put_cause_list(causes);
++}
++EXPORT_SYMBOL(add_causes_zero_to_bio);
++
++void move_causes_bh_to_bio(struct buffer_head *bh,
++						   struct bio *bio) {
++	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 3;
++
++	spin_lock(&bh->causes_lock);
++	if (bh->causes) {
++		if (cause_list_check(bh->causes)) {
++			spin_unlock(&bh->causes_lock);
++			return;
++		}
++
++		if (!bio->cll)
++			bio->cll = new_cause_list_list(max_pages_per_bio);
++
++		WARN_ON(bh->causes->item_count == 0 &&
++				bh->causes->type != SPLIT_JOURNAL);
++
++		bh->causes->size = bh->b_size;
++		cause_list_list_add(bio->cll, bh->causes);
++		put_cause_list(bh->causes);
++		bh->causes = NULL;
++	}
++	spin_unlock(&bh->causes_lock);
++}
++EXPORT_SYMBOL(move_causes_bh_to_bio);
++
++void set_cause_list_type(struct cause_list* cause_list, int type) {
++	if (!cause_list)
++		return;
++	if (cause_list_check(cause_list))
++		return;
++	cause_list->type = type;
++}
++EXPORT_SYMBOL(set_cause_list_type);
++
++///////////////////////////
++// cause list list stuff //
++///////////////////////////
++
++struct cause_list_list *new_cause_list_list(int item_capacity) {
++	struct cause_list_list *cll = NULL;
++	struct cause_list *uniq_causes = NULL;
++	int alloc_size = sizeof(*cll) + sizeof(cll->items[0])*item_capacity;
++	if (item_capacity < 0) {
++		WARN_ON("cannot create negative capacity cll");
++		return NULL;
++	}
++	cll = kmalloc(alloc_size, GFP_ATOMIC);
++	uniq_causes = new_cause_list();
++	if (!cll || !uniq_causes) {
++		kfree(cll);
++		kfree(uniq_causes);
++		return NULL;
++	}
++	memset(cll, 0, alloc_size);
++	// size and item_count are 0
++	cll->uniq_causes = uniq_causes;
++	cll->item_capacity = item_capacity;
++	return cll;
++}
++EXPORT_SYMBOL(new_cause_list_list);
++
++void del_cause_list_list(struct cause_list_list *cll) {
++	int i;
++	if (!cll)
++		return;
++	for(i=0; i<cll->item_count; i++)
++		put_cause_list(cll->items[i]);
++	put_cause_list(cll->uniq_causes);
++	kfree(cll);
++}
++EXPORT_SYMBOL(del_cause_list_list);
++
++void cause_list_list_add(struct cause_list_list *cll,
++						 struct cause_list *cl) {
++	if (!cll || !cl)
++		return;
++	if (cll->item_count == cll->item_capacity) {
++		WARN_ON("cll too small!");
++		return;
++	}
++
++	if (cll->item_count == 0 || cl != cll->items[cll->item_count-1])
++		cause_list_copy(cl, &cll->uniq_causes);
++
++	cll->items[cll->item_count] = get_cause_list(cl);
++	cll->item_count++;
++	cll->size += cl->size;
++	cll->uniq_causes->size = cll->size;
++}
++EXPORT_SYMBOL(cause_list_list_add);
++
++
++struct cause_list_mem_desc get_cause_list_mem(){
++	struct cause_list_mem_desc desc;
++	desc.cause_list_alloc = atomic_read(&cause_list_alloc);
++	desc.cause_list_free = atomic_read(&cause_list_free);
++	desc.cause_item_alloc = atomic_read(&cause_item_alloc);
++	desc.cause_item_free = atomic_read(&cause_item_free);
++	return desc;
++}
++EXPORT_SYMBOL(get_cause_list_mem);
++
++#endif
+diff --git a/block/cfq-iosched.c b/block/cfq-iosched.c
+index 3548705..9fb2814 100644
+--- a/block/cfq-iosched.c
++++ b/block/cfq-iosched.c
+@@ -305,6 +305,11 @@ struct cfq_data {
+ 
+ 	/* Number of groups which are on blkcg->blkg_list */
+ 	unsigned int nr_blkcg_linked_grps;
++
++	/*
++	 * yangsuli added tracing facility
++	 */
++	int prio_served_rqs[IOPRIO_BE_NR];
+ };
+ 
+ static struct cfq_group *cfq_get_next_cfqg(struct cfq_data *cfqd);
+@@ -610,6 +615,7 @@ static inline unsigned
+ cfq_scaled_cfqq_slice(struct cfq_data *cfqd, struct cfq_queue *cfqq)
+ {
+ 	unsigned slice = cfq_prio_to_slice(cfqd, cfqq);
++	//printk("yangsuli cfq_prio_to_slice returned %d for cfq %p prio %d\n", slice, cfqq, cfqq->ioprio);
+ 	if (cfqd->cfq_latency) {
+ 		/*
+ 		 * interested queues (we consider only the ones with the same
+@@ -644,6 +650,8 @@ cfq_set_prio_slice(struct cfq_data *cfqd, struct cfq_queue *cfqq)
+ 	cfqq->slice_start = jiffies;
+ 	cfqq->slice_end = jiffies + slice;
+ 	cfqq->allocated_slice = slice;
++	//printk("yangsuli cfqq:%p of prio %lu slice set to %d\n", cfqq,
++	//		IOPRIO_PRIO_DATA(cfqq->ioprio), cfqq->allocated_slice);
+ 	cfq_log_cfqq(cfqd, cfqq, "set_slice=%lu", cfqq->slice_end - jiffies);
+ }
+ 
+@@ -1720,6 +1728,8 @@ static void __cfq_set_active_queue(struct cfq_data *cfqd,
+ 	if (cfqq) {
+ 		cfq_log_cfqq(cfqd, cfqq, "set_active wl_prio:%d wl_type:%d",
+ 				cfqd->serving_prio, cfqd->serving_type);
++	//	printk("yangsuli set_active cfqq:%p prio:%lu at %lu\n",
++	//			cfqq, IOPRIO_PRIO_DATA(cfqq->ioprio), jiffies);
+ 		cfq_blkiocg_update_avg_queue_size_stats(&cfqq->cfqg->blkg);
+ 		cfqq->slice_start = 0;
+ 		cfqq->dispatch_start = jiffies;
+@@ -2333,8 +2343,10 @@ static struct cfq_queue *cfq_select_queue(struct cfq_data *cfqd)
+ 	/*
+ 	 * We were waiting for group to get backlogged. Expire the queue
+ 	 */
+-	if (cfq_cfqq_wait_busy(cfqq) && !RB_EMPTY_ROOT(&cfqq->sort_list))
++	if (cfq_cfqq_wait_busy(cfqq) && !RB_EMPTY_ROOT(&cfqq->sort_list)){
++		//printk("yangsuli waiting for group to get backlooged cause queue expeire: cfqq: %p prio: %lu\n", cfqq, IOPRIO_PRIO_DATA(cfqq->ioprio));
+ 		goto expire;
++	}
+ 
+ 	/*
+ 	 * The active queue has run out of time, expire it and select new.
+@@ -2374,6 +2386,7 @@ static struct cfq_queue *cfq_select_queue(struct cfq_data *cfqd)
+ 	if (new_cfqq) {
+ 		if (!cfqq->new_cfqq)
+ 			cfq_setup_merge(cfqq, new_cfqq);
++		//printk("yangsuli another queue has request waiting within mean seek distance cause queue expeire: cfqq: %p prio: %lu\n", cfqq, IOPRIO_PRIO_DATA(cfqq->ioprio));
+ 		goto expire;
+ 	}
+ 
+@@ -2416,6 +2429,7 @@ check_group_idle:
+ 	}
+ 
+ expire:
++	//printk("yangsuli code path fall cause queue expeire: cfqq: %p prio: %lu\n", cfqq, IOPRIO_PRIO_DATA(cfqq->ioprio));
+ 	cfq_slice_expired(cfqd, 0);
+ new_queue:
+ 	/*
+@@ -2591,6 +2605,8 @@ static bool cfq_dispatch_request(struct cfq_data *cfqd, struct cfq_queue *cfqq)
+ 	 */
+ 	cfq_dispatch_insert(cfqd->queue, rq);
+ 
++	cfqd->prio_served_rqs[cfqq->ioprio]++;
++
+ 	if (!cfqd->active_cic) {
+ 		struct cfq_io_context *cic = RQ_CIC(rq);
+ 
+@@ -2626,6 +2642,8 @@ static int cfq_dispatch_requests(struct request_queue *q, int force)
+ 	if (!cfq_dispatch_request(cfqd, cfqq))
+ 		return 0;
+ 
++	//printk("yangsuli dispatched a request from cfqq %p prio %lu\n", cfqq, IOPRIO_PRIO_DATA(cfqq->ioprio));
++
+ 	cfqq->slice_dispatch++;
+ 	cfq_clear_cfqq_must_dispatch(cfqq);
+ 
+@@ -3506,6 +3524,17 @@ static void cfq_insert_request(struct request_queue *q, struct request *rq)
+ {
+ 	struct cfq_data *cfqd = q->elevator->elevator_data;
+ 	struct cfq_queue *cfqq = RQ_CFQQ(rq);
++	
++	/*
++	int raw_prio = ((struct cfq_io_context*)rq->elevator_private[0])->ioc->ioprio;
++	int prio;
++	if(ioprio_valid(raw_prio)){
++        	prio = IOPRIO_PRIO_DATA(raw_prio);
++	}else{
++		prio = IOPRIO_NORM;
++	}
++	//printk("cfq_insert_request called. execname %s data_size %d prio %d\n", current->comm, blk_rq_bytes(rq), prio);
++	*/
+ 
+ 	cfq_log_cfqq(cfqd, cfqq, "insert_request");
+ 	cfq_init_prio_data(cfqq, RQ_CIC(rq)->ioc);
+@@ -3933,6 +3962,11 @@ static void cfq_exit_queue(struct elevator_queue *e)
+ 	struct cfq_data *cfqd = e->elevator_data;
+ 	struct request_queue *q = cfqd->queue;
+ 	bool wait = false;
++	int i;
++
++	for ( i = 0; i < IOPRIO_BE_NR; i++){
++		printk("cfq prio: %d req_num: %d\n", i, cfqd->prio_served_rqs[i]);
++	}
+ 
+ 	cfq_shutdown_timer_wq(cfqd);
+ 
+@@ -4111,8 +4145,13 @@ static void *cfq_init_queue(struct request_queue *q)
+ 	cfqd->cfq_slice_async_rq = cfq_slice_async_rq;
+ 	cfqd->cfq_slice_idle = cfq_slice_idle;
+ 	cfqd->cfq_group_idle = cfq_group_idle;
+-	cfqd->cfq_latency = 1;
++	cfqd->cfq_latency = 0;
+ 	cfqd->hw_tag = -1;
++	
++	for (i = 0; i < IOPRIO_BE_NR; i++){
++		cfqd->prio_served_rqs[i] = 0;
++	}
++
+ 	/*
+ 	 * we optimistically start assuming sync ops weren't delayed in last
+ 	 * second, in order to have larger depth for async operations.
+diff --git a/block/elevator.c b/block/elevator.c
+index 66343d6..f76d661 100644
+--- a/block/elevator.c
++++ b/block/elevator.c
+@@ -177,6 +177,9 @@ static void *elevator_init_queue(struct request_queue *q,
+ static void elevator_attach(struct request_queue *q, struct elevator_queue *eq,
+ 			   void *data)
+ {
++	q->sched_uniq++;
++	if (q->sched_uniq < 0)
++		q->sched_uniq = 1;
+ 	q->elevator = eq;
+ 	eq->elevator_data = data;
+ }
+@@ -284,6 +287,7 @@ int elevator_init(struct request_queue *q, char *name)
+ 		return -ENOMEM;
+ 	}
+ 
++	q->sched_uniq = 1000; // arbitrary start num
+ 	elevator_attach(q, eq, data);
+ 	return 0;
+ }
+@@ -466,6 +470,18 @@ void elv_dispatch_add_tail(struct request_queue *q, struct request *rq)
+ }
+ EXPORT_SYMBOL(elv_dispatch_add_tail);
+ 
++void elv_dispatch_add_head(struct request_queue *q, struct request *rq)
++{
++	if (q->last_merge == rq)
++		q->last_merge = NULL;
++
++	elv_rqhash_del(q, rq);
++
++	q->nr_sorted--;
++	list_add(&rq->queuelist, &q->queue_head);
++}
++EXPORT_SYMBOL(elv_dispatch_add_head);
++
+ int elv_merge(struct request_queue *q, struct request **req, struct bio *bio)
+ {
+ 	struct elevator_queue *e = q->elevator;
+@@ -1099,3 +1115,92 @@ struct request *elv_rb_latter_request(struct request_queue *q,
+ 	return NULL;
+ }
+ EXPORT_SYMBOL(elv_rb_latter_request);
++
++
++struct block_device *btrfs_inode_to_bdev(struct inode*);
++struct request_queue *inode_to_request_queue(struct inode *inode) {
++	struct request_queue *rq = NULL;
++	struct block_device *bdev = NULL;
++	if (!inode)
++		return NULL;
++	if(!S_ISREG(inode->i_mode) && !S_ISDIR(inode->i_mode)){
++		return NULL;
++	}
++	if (!inode->i_sb)
++		return NULL;
++
++	if(inode->i_sb->s_type &&
++			inode->i_sb->s_type->name &&
++			!strcmp(inode->i_sb->s_type->name, "btrfs")){
++		bdev = btrfs_inode_to_bdev(inode);
++	}else{
++		bdev = inode->i_sb->s_bdev;
++	}
++
++	if (!bdev)
++		return NULL;
++
++	rq = bdev_get_queue(bdev);
++
++	if(!rq || !rq->elevator || !rq->elevator->elevator_type)
++		return NULL;
++
++	return rq;
++
++}
++
++
++void get_elevator_call_info_from_inode(struct inode* inode,
++										  struct request_queue **rq,
++										  struct module **module,
++										  struct elevator_syscall_ops *sops) {
++	   *rq = inode_to_request_queue(inode);
++
++	if(!(*rq))
++		goto skip;
++
++	spin_lock_irq((*rq)->queue_lock);
++	*module = (*rq)->elevator->elevator_type->elevator_owner;
++	if(*module && try_module_get(*module)){
++		sops->sched_uniq = (*rq)->sched_uniq;
++		sops->read_entry_fn = (*rq)->elevator->elevator_type->ops.elevator_read_entry_fn;
++		sops->write_entry_fn = (*rq)->elevator->elevator_type->ops.elevator_write_entry_fn;
++		sops->fsync_entry_fn = (*rq)->elevator->elevator_type->ops.elevator_fsync_entry_fn;
++		sops->mkdir_entry_fn = (*rq)->elevator->elevator_type->ops.elevator_mkdir_entry_fn;
++		sops->create_entry_fn = (*rq)->elevator->elevator_type->ops.elevator_create_entry_fn;
++		sops->read_return_fn = (*rq)->elevator->elevator_type->ops.elevator_read_return_fn;
++		sops->write_return_fn = (*rq)->elevator->elevator_type->ops.elevator_write_return_fn;
++		sops->fsync_return_fn = (*rq)->elevator->elevator_type->ops.elevator_fsync_return_fn;
++		sops->mkdir_return_fn = (*rq)->elevator->elevator_type->ops.elevator_mkdir_return_fn;
++		sops->create_return_fn = (*rq)->elevator->elevator_type->ops.elevator_create_return_fn;
++	}else{
++		spin_unlock_irq((*rq)->queue_lock);
++		goto skip;
++	}
++	spin_unlock_irq((*rq)->queue_lock);
++	return;
++
++ skip:
++	*rq = NULL;
++	*module = NULL;
++	memset(sops, 0, sizeof(*sops));
++}
++void get_elevator_call_info(struct file* filp,
++										  struct request_queue **rq,
++										  struct module **module,
++										  struct elevator_syscall_ops *sops) {
++	if (!filp)
++		goto skip;
++	if (!filp->f_mapping)
++		goto skip;
++	if (!filp->f_mapping->host)
++		goto skip;
++
++	get_elevator_call_info_from_inode(filp->f_mapping->host, rq, module, sops);
++	return;
++
++ skip:
++	*rq = NULL;
++	*module = NULL;
++	memset(sops, 0, sizeof(*sops));
++}
+diff --git a/fs/bio.c b/fs/bio.c
+index b84d851..790edc2 100644
+--- a/fs/bio.c
++++ b/fs/bio.c
+@@ -25,6 +25,7 @@
+ #include <linux/module.h>
+ #include <linux/mempool.h>
+ #include <linux/workqueue.h>
++#include <linux/cause_tags.h>
+ #include <scsi/sg.h>		/* for struct sg_iovec */
+ 
+ #include <trace/events/block.h>
+@@ -234,6 +235,8 @@ void bio_free(struct bio *bio, struct bio_set *bs)
+ {
+ 	void *p;
+ 
++	del_cause_list_list(bio->cll);
++
+ 	if (bio_has_allocated_vec(bio))
+ 		bvec_free_bs(bs, bio->bi_io_vec, BIO_POOL_IDX(bio));
+ 
+diff --git a/fs/btrfs/extent_io.c b/fs/btrfs/extent_io.c
+index 73e4cbc..93d089f 100644
+--- a/fs/btrfs/extent_io.c
++++ b/fs/btrfs/extent_io.c
+@@ -19,6 +19,8 @@
+ #include "btrfs_inode.h"
+ #include "volumes.h"
+ 
++#include <linux/cause_tags.h>
++
+ static struct kmem_cache *extent_state_cache;
+ static struct kmem_cache *extent_buffer_cache;
+ 
+@@ -52,6 +54,46 @@ struct extent_page_data {
+ 	unsigned int sync_io:1;
+ };
+ 
++/*
++For debuging: prints the page information 
++*/
++void print_page_info(struct page *page) {
++    struct inode *inode = page->mapping->host;
++    //u64 start = (u64) page->index << PAGE_CACHE_SHIFT;
++    //u64 page_end = start + PAGE_CACHE_SIZE - 1;
++    //u64 end;
++    //struct btrfs_ordered_extent *ordered;
++    struct extent_io_tree *io_tree = &BTRFS_I(inode)->io_tree;
++    struct extent_buffer *eb;
++    unsigned long len;
++    u64 bytenr = page_offset(page);
++
++    printk("### page %ld : ", page->index);
++    
++    if(page->locked_causes == NULL){
++	printk("..No causes ");
++    }
++    else{
++	printk("..With causes ");
++    }
++
++    if (page->private == EXTENT_PAGE_PRIVATE){
++        printk("..No extent on private .\n");
++        return;
++    }
++    else{
++	printk("..has extent on private ..");
++    }
++
++    len = page->private >> 2;
++    eb = find_extent_buffer(io_tree, bytenr, len);
++    if (!eb) {
++        printk("..No buffer.\n");
++    } else {
++        printk("..With Buffer.\n");
++    }
++}
++
+ int __init extent_io_init(void)
+ {
+ 	extent_state_cache = kmem_cache_create("extent_state",
+@@ -2407,6 +2449,47 @@ btrfs_bio_alloc(struct block_device *bdev, u64 first_sector, int nr_vecs,
+ 	return bio;
+ }
+ 
++static void request_sanity_check(struct bio *bio) {
++	struct cause_list *causes;
++	//struct bio *bio = rq->bio;
++	WARN_ON(bio == NULL);
++	while (bio != NULL) {
++		// (cll set) iff (req is a write)
++		//WARN_ON((bio->cll != NULL) && (rq_data_dir(rq) == READ));
++		//WARN_ON((bio->cll == NULL) && (rq_data_dir(rq) == WRITE));
++		if (bio->cll ) {
++			int cl_count = 0;
++			int cl_bytes = 0;
++			int i;
++			for (i=0; i < bio->cll->item_count; i++) {
++				causes = bio->cll->items[i];
++				if (causes->type != SPLIT_ZERO) {
++					WARN_ON(causes->size != (4 * 1024));
++					// sometimes transactions are commited without any I/O
++					// for processes, so journal cause_list's may be empty
++					if (causes->type != SPLIT_JOURNAL)
++						WARN_ON(causes->item_count == 0);
++				}
++				cl_count++;
++				cl_bytes += causes->size;
++			}
++
++			if(bio->cll->size != bio->bi_size){
++				printk("size not match cll_>size = %d, bio->size = %d", bio->cll->size, bio->bi_size);
++			}
++/*			if(bio->cll->size != bio->bi_size) {
++				printk(KERN_INFO "mismatch %ld != %d (%d)",
++					   bio->cll->size, bio->bi_size,
++					   bio->cll->item_count);
++			}
++*/
++			WARN_ON(cl_count != bio->cll->item_count);
++			WARN_ON(cl_bytes != bio->cll->size);
++		}
++		bio = bio->bi_next;
++	}
++}
++
+ static int submit_one_bio(int rw, struct bio *bio, int mirror_num,
+ 			  unsigned long bio_flags)
+ {
+@@ -2422,6 +2505,17 @@ static int submit_one_bio(int rw, struct bio *bio, int mirror_num,
+ 
+ 	bio_get(bio);
+ 
++	// SAMER
++    /*
++	printk("submit_one_bio : vcnt %d and size %d : ", bio->bi_vcnt, bio->bi_size);
++	print_page_info(page);
++	if(bio->cll)
++		printk("BIO with causes. page %ld\n", page->index);
++	else
++		printk("BIO with NO causes. page %ld\n", page->index);
++
++	WARN_ON(1);
++    */
+ 	if (tree->ops && tree->ops->submit_bio_hook)
+ 		ret = tree->ops->submit_bio_hook(page->mapping->host, rw, bio,
+ 					   mirror_num, bio_flags, start);
+@@ -2434,6 +2528,42 @@ static int submit_one_bio(int rw, struct bio *bio, int mirror_num,
+ 	return ret;
+ }
+ 
++void copy_causes_page_to_bio(struct page *page, struct bio *bio, size_t page_size) {
++#ifndef DISABLE_CAUSES  /*just to enable search in code for changes*/
++#endif
++	//yangsuli ? why >> 1
++	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 1;
++	struct cause_list_locked* locked_causes = (struct cause_list_locked*) page->locked_causes;
++	if(!locked_causes){
++		return;
++	}
++	if(!(locked_causes->causes)){
++		return;
++	}
++	
++	if (!bio->cll)
++		bio->cll = new_cause_list_list(max_pages_per_bio);
++
++	BUG_ON(page->locked_causes == NULL);
++	spin_lock(&locked_causes->lock);
++	if(!(locked_causes->causes)){
++		spin_unlock(&locked_causes->lock);
++		return;
++	}
++
++	WARN_ON(locked_causes->causes->item_count == 0 &&
++				locked_causes->causes->type != SPLIT_JOURNAL);
++
++	locked_causes->causes->size = page_size;
++	cause_list_list_add(bio->cll, locked_causes->causes);
++
++	// free cause list
++	put_cause_list(locked_causes->causes);
++//yangsuli: why???
++	locked_causes->causes = NULL;
++	spin_unlock(&locked_causes->lock);
++}
++
+ static int submit_extent_page(int rw, struct extent_io_tree *tree,
+ 			      struct page *page, sector_t sector,
+ 			      size_t size, unsigned long offset,
+@@ -2461,11 +2591,15 @@ static int submit_extent_page(int rw, struct extent_io_tree *tree,
+ 			contig = bio->bi_sector + (bio->bi_size >> 9) ==
+ 				sector;
+ 
++#ifndef DISABLE_CAUSES
++		copy_causes_page_to_bio(page, bio, page_size);
++#endif
+ 		if (prev_bio_flags != bio_flags || !contig ||
+ 		    (tree->ops && tree->ops->merge_bio_hook &&
+ 		     tree->ops->merge_bio_hook(page, offset, page_size, bio,
+ 					       bio_flags)) ||
+ 		    bio_add_page(bio, page, page_size, offset) < page_size) {
++
+ 			ret = submit_one_bio(rw, bio, mirror_num,
+ 					     prev_bio_flags);
+ 			bio = NULL;
+@@ -2483,6 +2617,9 @@ static int submit_extent_page(int rw, struct extent_io_tree *tree,
+ 		return -ENOMEM;
+ 
+ 	bio_add_page(bio, page, page_size, offset);
++#ifndef DISABLE_CAUSES
++	copy_causes_page_to_bio(page, bio, page_size);
++#endif
+ 	bio->bi_end_io = end_io_func;
+ 	bio->bi_private = tree;
+ 
+diff --git a/fs/btrfs/extent_io.h b/fs/btrfs/extent_io.h
+index 2e32510..3a6ccf1 100644
+--- a/fs/btrfs/extent_io.h
++++ b/fs/btrfs/extent_io.h
+@@ -188,6 +188,7 @@ int unlock_extent_cached(struct extent_io_tree *tree, u64 start, u64 end,
+ 			 struct extent_state **cached, gfp_t mask);
+ int try_lock_extent(struct extent_io_tree *tree, u64 start, u64 end,
+ 		    gfp_t mask);
++void print_page_info(struct page *page);
+ int extent_read_full_page(struct extent_io_tree *tree, struct page *page,
+ 			  get_extent_t *get_extent, int mirror_num);
+ int __init extent_io_init(void);
+diff --git a/fs/btrfs/file.c b/fs/btrfs/file.c
+index 97fbe93..bfe1da7 100644
+--- a/fs/btrfs/file.c
++++ b/fs/btrfs/file.c
+@@ -40,6 +40,9 @@
+ #include "locking.h"
+ #include "compat.h"
+ 
++#include <linux/blkdev.h>
++#include <linux/cause_tags.h>
++
+ /*
+  * when auto defrag is enabled we
+  * queue up these defrag structs to remember which
+@@ -377,6 +380,57 @@ void btrfs_drop_pages(struct page **pages, size_t num_pages)
+ 	}
+ }
+ 
++void add_to_causes(struct inode *inode, struct page *page, loff_t pos) {
++#ifndef DISABLE_CAUSES	
++
++    struct request_queue *q = NULL;
++    elevator_causes_dirty_fn *causes_dirty_fn = NULL;
++    int cause_added;
++    struct cause_list_locked * locked_causes = (struct cause_list_locked *) page->locked_causes;
++
++    if(!locked_causes){
++	//printk("### no causes.\n");
++	WARN_ON(1);
++	return;
++    }
++    else{
++	//printk("### causes.\n");
++    }
++
++    // add this cause (data write)
++    spin_lock(&locked_causes->lock);
++    if(!(locked_causes->causes)){
++	locked_causes->causes = new_cause_list(); 
++    }
++    cause_added = cause_list_add(&locked_causes->causes, current);
++    set_cause_list_type(locked_causes->causes, SPLIT_DATA);
++
++    // dirty hook
++    q = inode_to_request_queue(inode);
++    if (q && locked_causes->causes && cause_added) {
++        spin_lock_irq(q->queue_lock);
++
++	//yangsuli ????
++        if (locked_causes->causes->callback_q == NULL) {
++            // TODO(tyler): need refcount get on q?
++            locked_causes->causes->callback_q = q;
++            locked_causes->causes->sched_uniq = q->sched_uniq;
++            locked_causes->causes->size = PAGE_CACHE_SIZE;
++        }
++        // one buffer can't correspond to many disks, right? 
++        WARN_ON(locked_causes->causes->callback_q != q);
++
++        causes_dirty_fn = q->elevator->elevator_type->ops.elevator_causes_dirty_fn;
++        if (causes_dirty_fn && q->sched_uniq == locked_causes->causes->sched_uniq)
++            causes_dirty_fn(q, locked_causes->causes, current, inode, pos);
++
++        spin_unlock_irq(q->queue_lock);
++    }
++    spin_unlock(&locked_causes->lock);
++
++#endif
++}
++
+ /*
+  * after copy_from_user, pages need to be dirtied and we need to make
+  * sure holes are created between the current EOF and the start of
+@@ -413,6 +467,10 @@ int btrfs_dirty_pages(struct btrfs_root *root, struct inode *inode,
+ 		SetPageUptodate(p);
+ 		ClearPageChecked(p);
+ 		set_page_dirty(p);
++
++#ifndef DISABLE_CAUSES
++		add_to_causes(inode, p, pos);
++#endif
+ 	}
+ 
+ 	/*
+@@ -1074,6 +1132,7 @@ static noinline int prepare_pages(struct btrfs_root *root, struct file *file,
+ 	int faili = 0;
+ 	u64 start_pos;
+ 	u64 last_pos;
++	struct cause_list_locked * locked_causes;
+ 
+ 	start_pos = pos & ~((u64)root->sectorsize - 1);
+ 	last_pos = ((u64)index + num_pages) << PAGE_CACHE_SHIFT;
+@@ -1088,6 +1147,27 @@ again:
+ 			goto fail;
+ 		}
+ 
++#ifndef DISABLE_CAUSES
++		// allocate the cause list if this a new page
++		if (pages[i]->locked_causes == NULL){
++			//printk("### No Causes.\n");	
++			pages[i]->locked_causes = kmalloc(sizeof(struct cause_list_locked), GFP_KERNEL);
++			BUG_ON(!(pages[i]->locked_causes));
++			locked_causes = (struct cause_list_locked *) pages[i]->locked_causes;
++			spin_lock_init(&locked_causes->lock);
++			locked_causes->causes = new_cause_list();                    
++        	}
++		else{
++			locked_causes = (struct cause_list_locked *) pages[i]->locked_causes;
++			if (locked_causes->causes == NULL){
++				locked_causes->causes = new_cause_list(); 
++			}
++			else{
++		    		//printk("### has Causes.\n");	
++			}
++		}
++#endif
++
+ 		if (i == 0)
+ 			err = prepare_uptodate_page(pages[i], pos,
+ 						    force_uptodate);
+diff --git a/fs/btrfs/super.c b/fs/btrfs/super.c
+index 200f63b..58fbe54 100644
+--- a/fs/btrfs/super.c
++++ b/fs/btrfs/super.c
+@@ -62,6 +62,24 @@
+ static const struct super_operations btrfs_super_ops;
+ static struct file_system_type btrfs_fs_type;
+ 
++struct block_device *btrfs_inode_to_bdev(struct inode* inode){
++	struct btrfs_inode *btrfs_inode = BTRFS_I(inode);
++	struct btrfs_device *btrfs_device;
++
++
++	if(!btrfs_inode->root)
++		return NULL;
++	if(!btrfs_inode->root->fs_info)
++		return NULL;
++	if(!btrfs_inode->root->fs_info->fs_devices)
++		return NULL;
++	if(btrfs_inode->root->fs_info->fs_devices->num_devices != 1)
++		return NULL;
++
++	btrfs_device = list_first_entry(&btrfs_inode->root->fs_info->fs_devices->devices, struct btrfs_device, dev_list);
++	return btrfs_device->bdev;
++}
++
+ static const char *btrfs_decode_error(struct btrfs_fs_info *fs_info, int errno,
+ 				      char nbuf[16])
+ {
+diff --git a/fs/buffer.c b/fs/buffer.c
+index 19a4f0b..6b08def 100644
+--- a/fs/buffer.c
++++ b/fs/buffer.c
+@@ -42,6 +42,7 @@
+ #include <linux/mpage.h>
+ #include <linux/bit_spinlock.h>
+ #include <linux/cleancache.h>
++#include <linux/cause_tags.h>
+ 
+ static int fsync_buffers_list(spinlock_t *lock, struct list_head *list);
+ 
+@@ -1911,12 +1912,15 @@ int __block_write_begin(struct page *page, loff_t pos, unsigned len,
+ EXPORT_SYMBOL(__block_write_begin);
+ 
+ static int __block_commit_write(struct inode *inode, struct page *page,
+-		unsigned from, unsigned to)
++		unsigned from, unsigned to, long pos)
+ {
+ 	unsigned block_start, block_end;
+ 	int partial = 0;
+ 	unsigned blocksize;
+ 	struct buffer_head *bh, *head;
++	struct request_queue *q = NULL;
++	elevator_causes_dirty_fn *causes_dirty_fn = NULL;
++	int cause_added;
+ 
+ 	blocksize = 1 << inode->i_blkbits;
+ 
+@@ -1930,6 +1934,37 @@ static int __block_commit_write(struct inode *inode, struct page *page,
+ 		} else {
+ 			set_buffer_uptodate(bh);
+ 			mark_buffer_dirty(bh);
++
++#ifndef DISABLE_CAUSES	
++
++			spin_lock(&bh->causes_lock);
++			// add this cause (data write)
++			cause_added = cause_list_add(&bh->causes, current);
++			set_cause_list_type(bh->causes, SPLIT_DATA);
++
++			// dirty hook
++			q = inode_to_request_queue(inode);
++			if (q && bh->causes && cause_added) {
++				spin_lock_irq(q->queue_lock);
++				
++				if (bh->causes->callback_q == NULL) {
++					// TODO(tyler): need refcount get on q?
++					bh->causes->callback_q = q;
++					bh->causes->sched_uniq = q->sched_uniq;
++					bh->causes->size = bh->b_size;
++				}
++				// one buffer can't correspond to many disks, right? 
++				WARN_ON(bh->causes->callback_q != q);
++
++				causes_dirty_fn = q->elevator->elevator_type->ops.elevator_causes_dirty_fn;
++				if (causes_dirty_fn && q->sched_uniq == bh->causes->sched_uniq)
++					causes_dirty_fn(q, bh->causes, current, inode, pos);
++
++				spin_unlock_irq(q->queue_lock);
++			}
++			spin_unlock(&bh->causes_lock);
++
++#endif
+ 		}
+ 		clear_buffer_new(bh);
+ 	}
+@@ -2004,7 +2039,7 @@ int block_write_end(struct file *file, struct address_space *mapping,
+ 	flush_dcache_page(page);
+ 
+ 	/* This could be a short (even 0-length) commit */
+-	__block_commit_write(inode, page, start, start+copied);
++	__block_commit_write(inode, page, start, start+copied, pos);
+ 
+ 	return copied;
+ }
+@@ -2317,7 +2352,7 @@ EXPORT_SYMBOL(cont_write_begin);
+ int block_commit_write(struct page *page, unsigned from, unsigned to)
+ {
+ 	struct inode *inode = page->mapping->host;
+-	__block_commit_write(inode,page,from,to);
++	__block_commit_write(inode,page,from,to,-1);
+ 	return 0;
+ }
+ EXPORT_SYMBOL(block_commit_write);
+@@ -2944,6 +2979,9 @@ int submit_bh(int rw, struct buffer_head * bh)
+ 	bio->bi_end_io = end_bio_bh_io_sync;
+ 	bio->bi_private = bh;
+ 
++	if (rw & WRITE)
++		move_causes_bh_to_bio(bh, bio);
++
+ 	bio_get(bio);
+ 	submit_bio(rw, bio);
+ 
+@@ -3221,6 +3259,12 @@ struct buffer_head *alloc_buffer_head(gfp_t gfp_flags)
+ {
+ 	struct buffer_head *ret = kmem_cache_zalloc(bh_cachep, gfp_flags);
+ 	if (ret) {
++
++#ifndef DISABLE_CAUSES
++		spin_lock_init(&ret->causes_lock);
++		BUG_ON(ret->causes);
++#endif
++
+ 		INIT_LIST_HEAD(&ret->b_assoc_buffers);
+ 		preempt_disable();
+ 		__this_cpu_inc(bh_accounting.nr);
+@@ -3233,6 +3277,9 @@ EXPORT_SYMBOL(alloc_buffer_head);
+ 
+ void free_buffer_head(struct buffer_head *bh)
+ {
++	put_cause_list(bh->causes);
++	bh->causes = NULL;
++
+ 	BUG_ON(!list_empty(&bh->b_assoc_buffers));
+ 	kmem_cache_free(bh_cachep, bh);
+ 	preempt_disable();
+diff --git a/fs/ext4/ext4_jbd2.c b/fs/ext4/ext4_jbd2.c
+index d0b8f98..9b2b497 100644
+--- a/fs/ext4/ext4_jbd2.c
++++ b/fs/ext4/ext4_jbd2.c
+@@ -5,6 +5,7 @@
+ #include "ext4_jbd2.h"
+ 
+ #include <trace/events/ext4.h>
++#include <linux/cause_tags.h>
+ 
+ int __ext4_journal_get_write_access(const char *where, unsigned int line,
+ 				    handle_t *handle, struct buffer_head *bh)
+@@ -107,6 +108,14 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
+ {
+ 	int err = 0;
+ 
++#ifndef DISABLE_CAUSES
++	// add this cause (meta write)
++	spin_lock(&bh->causes_lock);
++	cause_list_add(&bh->causes, current);
++	set_cause_list_type(bh->causes, SPLIT_CHECKPOINT);
++	spin_unlock(&bh->causes_lock);
++#endif
++
+ 	if (ext4_handle_valid(handle)) {
+ 		err = jbd2_journal_dirty_metadata(handle, bh);
+ 		/* Errors can only happen if there is a bug */
+diff --git a/fs/ext4/fsync.c b/fs/ext4/fsync.c
+index a8d03a4..30c3a75 100644
+--- a/fs/ext4/fsync.c
++++ b/fs/ext4/fsync.c
+@@ -205,6 +205,26 @@ static int __sync_inode(struct inode *inode, int datasync)
+  * i_mutex lock is held when entering and exiting this function
+  */
+ 
++#ifdef SPLIT_DEBUG
++static inline int get_time_diff(struct timeval *end, struct timeval *start){
++	return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_usec - start->tv_usec) / 1000;
++}
++
++static int is_on_sdb(struct super_block *sb){
++	if(!sb)
++		return 0;
++	if(!sb->s_bdev)
++		return 0;
++	if(!sb->s_bdev->bd_disk)
++		return 0;
++	if(!sb->s_bdev->bd_disk->disk_name)
++		return 0;
++	if(strcmp(sb->s_bdev->bd_disk->disk_name, "sdf") == 0)
++		return 1;
++	return 0;
++}
++#endif
++
+ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
+ {
+ 	struct inode *inode = file->f_mapping->host;
+@@ -213,12 +233,28 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
+ 	int ret;
+ 	tid_t commit_tid;
+ 	bool needs_barrier = false;
++#ifdef SPLIT_DEBUG
++	struct timeval wait_start, wait_end;
++	struct timeval wait_start2, wait_end2;
++	struct super_block *sb = inode->i_sb;
+ 
++	do_gettimeofday(&wait_start2);
++#endif
+ 	J_ASSERT(ext4_journal_current_handle() == NULL);
+ 
+ 	trace_ext4_sync_file_enter(file, datasync);
+ 
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	ret = filemap_write_and_wait_range(inode->i_mapping, start, end);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb)){
++		printk("yangsuli: fsync on file %s take %d ms flushing its own file data\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start)); 
++	}
++#endif
++	
+ 	if (ret)
+ 		return ret;
+ 	mutex_lock(&inode->i_mutex);
+@@ -260,11 +296,39 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
+ 	if (journal->j_flags & JBD2_BARRIER &&
+ 	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
+ 		needs_barrier = true;
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	ret = jbd2_complete_transaction(journal, commit_tid);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: fsync on file %s take %d ms waiting on commit %d\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start), commit_tid); 
++	}
++
++	do_gettimeofday(&wait_start);
++#endif
+ 	if (needs_barrier)
+ 		blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
++	
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: fsync on file %s take %d ms issue blk_flush\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start)); 
++	}
++#endif
++
+  out:
+ 	mutex_unlock(&inode->i_mutex);
+ 	trace_ext4_sync_file_exit(inode, ret);
++
++	
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end2);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: ext4_sync_file on file %s take %d ms\n", file->f_dentry->d_name.name, get_time_diff(&wait_end2, &wait_start2)); 
++	}
++#endif
++
+ 	return ret;
+ }
+diff --git a/fs/ext4/inode.c b/fs/ext4/inode.c
+index 45778a6..e6ff92d 100644
+--- a/fs/ext4/inode.c
++++ b/fs/ext4/inode.c
+@@ -38,6 +38,7 @@
+ #include <linux/printk.h>
+ #include <linux/slab.h>
+ #include <linux/ratelimit.h>
++#include <linux/cause_tags.h>
+ 
+ #include "ext4_jbd2.h"
+ #include "xattr.h"
+@@ -1473,7 +1474,7 @@ static void ext4_print_free_blocks(struct inode *inode)
+  * The function skips space we know is already mapped to disk blocks.
+  *
+  */
+-static void mpage_da_map_and_submit(struct mpage_da_data *mpd)
++static void __mpage_da_map_and_submit(struct mpage_da_data *mpd)
+ {
+ 	int err, blks, get_blocks_flags;
+ 	struct ext4_map_blocks map, *mapp = NULL;
+@@ -1605,6 +1606,14 @@ submit_io:
+ 	mpd->io_done = 1;
+ }
+ 
++static void mpage_da_map_and_submit(struct mpage_da_data *mpd)
++{
++	__mpage_da_map_and_submit(mpd);
++	// we are no longer acting as a proxy for dirty buffers
++	put_cause_list(current->causes);
++	current->causes = new_cause_list();
++}
++
+ #define BH_FLAGS ((1 << BH_Uptodate) | (1 << BH_Mapped) | \
+ 		(1 << BH_Delay) | (1 << BH_Unwritten))
+ 
+@@ -2104,8 +2113,9 @@ static int write_cache_pages_da(struct address_space *mapping,
+ 
+ 			if (!page_has_buffers(page)) {
+ 				mpage_add_bh_to_extent(mpd, logical,
+-						       PAGE_CACHE_SIZE,
+-						       (1 << BH_Dirty) | (1 << BH_Uptodate));
++						PAGE_CACHE_SIZE,
++						(1 << BH_Dirty) | (1 << BH_Uptodate));
++
+ 				if (mpd->io_done)
+ 					goto ret_extent_tail;
+ 			} else {
+@@ -2124,6 +2134,10 @@ static int write_cache_pages_da(struct address_space *mapping,
+ 					 * with the page in ext4_writepage
+ 					 */
+ 					if (ext4_bh_delay_or_unwritten(NULL, bh)) {
++						// are we a proxy?
++						if (current->causes)
++							cause_list_copy(bh->causes, &current->causes);
++
+ 						mpage_add_bh_to_extent(mpd, logical,
+ 								       bh->b_size,
+ 								       bh->b_state);
+@@ -2220,6 +2234,10 @@ static int ext4_da_writepages(struct address_space *mapping,
+ 	if (unlikely(sbi->s_mount_flags & EXT4_MF_FS_ABORTED))
+ 		return -EROFS;
+ 
++	// now acting as cause proxy
++	BUG_ON(current->causes);
++	current->causes = new_cause_list();
++
+ 	if (wbc->range_start == 0 && wbc->range_end == LLONG_MAX)
+ 		range_whole = 1;
+ 
+@@ -2308,10 +2326,12 @@ retry:
+ 		 * haven't done the I/O yet, map the blocks and submit
+ 		 * them for I/O.
+ 		 */
++
+ 		if (!mpd.io_done && mpd.next_page != mpd.first_page) {
+ 			mpage_da_map_and_submit(&mpd);
+ 			ret = MPAGE_DA_EXTENT_TAIL;
+ 		}
++
+ 		trace_ext4_da_write_pages(inode, &mpd);
+ 		wbc->nr_to_write -= mpd.pages_written;
+ 
+@@ -2360,6 +2380,10 @@ retry:
+ 		mapping->writeback_index = done_index;
+ 
+ out_writepages:
++	// done acting as cause proxy
++	put_cause_list(current->causes);
++	current->causes = NULL;
++
+ 	wbc->nr_to_write -= nr_to_writebump;
+ 	wbc->range_start = range_start;
+ 	trace_ext4_da_writepages_result(inode, wbc, ret, pages_written);
+diff --git a/fs/ext4/page-io.c b/fs/ext4/page-io.c
+index 54f566d..fad617d 100644
+--- a/fs/ext4/page-io.c
++++ b/fs/ext4/page-io.c
+@@ -24,6 +24,7 @@
+ #include <linux/workqueue.h>
+ #include <linux/kernel.h>
+ #include <linux/slab.h>
++#include <linux/cause_tags.h>
+ 
+ #include "ext4_jbd2.h"
+ #include "xattr.h"
+@@ -294,6 +295,7 @@ static int io_submit_init(struct ext4_io_submit *io,
+ 	if (!io_end)
+ 		return -ENOMEM;
+ 	bio = bio_alloc(GFP_NOIO, min(nvecs, BIO_MAX_PAGES));
++
+ 	bio->bi_sector = bh->b_blocknr * (bh->b_size >> 9);
+ 	bio->bi_bdev = bh->b_bdev;
+ 	bio->bi_private = io->io_end = io_end;
+@@ -347,8 +349,15 @@ submit_and_retry:
+ 	io->io_end->size += bh->b_size;
+ 	io->io_next_block++;
+ 	ret = bio_add_page(io->io_bio, bh->b_page, bh->b_size, bh_offset(bh));
++
++
++
+ 	if (ret != bh->b_size)
+ 		goto submit_and_retry;
++
++	// I think this path is only for writes
++	move_causes_bh_to_bio(bh, io->io_bio);
++
+ 	if ((io_end->num_io_pages == 0) ||
+ 	    (io_end->pages[io_end->num_io_pages-1] != io_page)) {
+ 		io_end->pages[io_end->num_io_pages++] = io_page;
+diff --git a/fs/inode.c b/fs/inode.c
+index e2d3633..ae03afd 100644
+--- a/fs/inode.c
++++ b/fs/inode.c
+@@ -227,6 +227,8 @@ static struct inode *alloc_inode(struct super_block *sb)
+ 		return NULL;
+ 	}
+ 
++	inode->i_private1 = 0;
++
+ 	return inode;
+ }
+ 
+@@ -1456,7 +1458,10 @@ void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
+ 		return;
+ 
+ 	inode->i_atime = now;
++
++#ifndef SPLIT_NODEP
+ 	mark_inode_dirty_sync(inode);
++#endif
+ 	mnt_drop_write(mnt);
+ }
+ EXPORT_SYMBOL(touch_atime);
+@@ -1507,7 +1512,10 @@ void file_update_time(struct file *file)
+ 		inode->i_ctime = now;
+ 	if (sync_it & S_MTIME)
+ 		inode->i_mtime = now;
++
++#ifndef SPLIT_NODEP
+ 	mark_inode_dirty_sync(inode);
++#endif
+ 	mnt_drop_write(file->f_path.mnt);
+ }
+ EXPORT_SYMBOL(file_update_time);
+diff --git a/fs/jbd2/checkpoint.c b/fs/jbd2/checkpoint.c
+index 16a698b..c210839 100644
+--- a/fs/jbd2/checkpoint.c
++++ b/fs/jbd2/checkpoint.c
+@@ -348,6 +348,7 @@ static int __process_buffer(journal_t *journal, struct journal_head *jh,
+ 		(*batch_count)++;
+ 		if (*batch_count == JBD2_NR_BATCH) {
+ 			spin_unlock(&journal->j_list_lock);
++			printk("yangsuli: journal checkpoint process submit %d blocks\n", *batch_count);
+ 			__flush_batch(journal, batch_count);
+ 			ret = 1;
+ 		}
+@@ -722,7 +723,7 @@ int __jbd2_journal_remove_checkpoint(struct journal_head *jh)
+ 				    transaction->t_tid, stats);
+ 
+ 	__jbd2_journal_drop_transaction(journal, transaction);
+-	kfree(transaction);
++	jbd2_free_transaction(transaction);
+ 
+ 	/* Just in case anybody was waiting for more transactions to be
+            checkpointed... */
+diff --git a/fs/jbd2/commit.c b/fs/jbd2/commit.c
+index ab9463a..8b60d75 100644
+--- a/fs/jbd2/commit.c
++++ b/fs/jbd2/commit.c
+@@ -29,6 +29,9 @@
+ #include <linux/bitops.h>
+ #include <trace/events/jbd2.h>
+ #include <asm/system.h>
++#include <linux/cause_tags.h>
++
++#define SPLIT_DEBUG
+ 
+ /*
+  * Default IO end handler for temporary BJ_IO buffer_heads.
+@@ -97,7 +100,8 @@ nope:
+ static int journal_submit_commit_record(journal_t *journal,
+ 					transaction_t *commit_transaction,
+ 					struct buffer_head **cbh,
+-					__u32 crc32_sum)
++					__u32 crc32_sum,
++					struct cause_list* cause_list)
+ {
+ 	struct journal_head *descriptor;
+ 	struct commit_header *tmp;
+@@ -115,6 +119,7 @@ static int journal_submit_commit_record(journal_t *journal,
+ 		return 1;
+ 
+ 	bh = jh2bh(descriptor);
++	bh->causes = get_cause_list(cause_list);
+ 
+ 	tmp = (struct commit_header *)bh->b_data;
+ 	tmp->h_magic = cpu_to_be32(JBD2_MAGIC_NUMBER);
+@@ -173,6 +178,9 @@ static int journal_wait_on_commit_record(journal_t *journal,
+  * use writepages() because with dealyed allocation we may be doing
+  * block allocation in writepages().
+  */
++#ifdef SPLIT_DEBUG
++static int is_on_sdb(struct super_block *sb);
++#endif
+ static int journal_submit_inode_data_buffers(struct address_space *mapping)
+ {
+ 	int ret;
+@@ -232,6 +240,11 @@ static int journal_submit_data_buffers(journal_t *journal,
+  * transaction if needed.
+  *
+  */
++#ifdef SPLIT_DEBUG
++static inline int get_time_diff(struct timeval *end, struct timeval *start){
++	return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_usec - start->tv_usec) / 1000;
++}
++#endif
+ static int journal_finish_inode_data_buffers(journal_t *journal,
+ 		transaction_t *commit_transaction)
+ {
+@@ -302,6 +315,22 @@ static void write_tag_block(int tag_bytes, journal_block_tag_t *tag,
+ 		tag->t_blocknr_high = cpu_to_be32((block >> 31) >> 1);
+ }
+ 
++#ifdef SPLIT_DEBUG
++static int is_on_sdb(struct super_block *sb){
++	if(!sb)
++		return 0;
++	if(!sb->s_bdev)
++		return 0;
++	if(!sb->s_bdev->bd_disk)
++		return 0;
++	if(!sb->s_bdev->bd_disk->disk_name)
++		return 0;
++	if(strcmp(sb->s_bdev->bd_disk->disk_name, "sdf") == 0)
++		return 1;
++	return 0;
++}
++#endif
++
+ /*
+  * jbd2_journal_commit_transaction
+  *
+@@ -331,6 +360,11 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ 	struct buffer_head *cbh = NULL; /* For transactional checksums */
+ 	__u32 crc32_sum = ~0;
+ 	struct blk_plug plug;
++	struct cause_list* cause_list = NULL;
++#ifdef SPLIT_DEBUG
++	struct super_block *sb = journal->j_private;
++	struct timeval wait_start, wait_end;
++#endif
+ 
+ 	/*
+ 	 * First job: lock down the current transaction and wait for
+@@ -364,7 +398,14 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ 	stats.run.rs_running = jbd2_time_diff(commit_transaction->t_start,
+ 					      stats.run.rs_locked);
+ 
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	spin_lock(&commit_transaction->t_handle_lock);
++
++	cause_list = get_cause_list(commit_transaction->causes);
++	set_cause_list_type(cause_list, SPLIT_JOURNAL);
++
+ 	while (atomic_read(&commit_transaction->t_updates)) {
+ 		DEFINE_WAIT(wait);
+ 
+@@ -380,6 +421,14 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ 		finish_wait(&journal->j_wait_updates, &wait);
+ 	}
+ 	spin_unlock(&commit_transaction->t_handle_lock);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: j_wait_updates take %d ms\n",get_time_diff(&wait_end, &wait_start)); 
++	}
++#endif
++
+ 
+ 	J_ASSERT (atomic_read(&commit_transaction->t_outstanding_credits) <=
+ 			journal->j_max_transaction_buffers);
+@@ -459,7 +508,7 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ 
+ 	blk_start_plug(&plug);
+ 	jbd2_journal_write_revoke_records(journal, commit_transaction,
+-					  WRITE_SYNC);
++					  WRITE_SYNC, cause_list);
+ 	blk_finish_plug(&plug);
+ 
+ 	jbd_debug(3, "JBD2: commit phase 2\n");
+@@ -488,6 +537,7 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ 	descriptor = NULL;
+ 	bufs = 0;
+ 	blk_start_plug(&plug);
++
+ 	while (commit_transaction->t_buffers) {
+ 
+ 		/* Find the next buffer to be journaled... */
+@@ -595,6 +645,9 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ 		}
+ 		set_bit(BH_JWrite, &jh2bh(new_jh)->b_state);
+ 		wbuf[bufs++] = jh2bh(new_jh);
++		(jh2bh(new_jh))->causes = jh->causes;
++		jh->causes = NULL;
++		set_cause_list_type((jh2bh(new_jh))->causes, SPLIT_JOURNAL_META);
+ 
+ 		/* Record the new block's tag in the current descriptor
+                    buffer */
+@@ -636,6 +689,8 @@ void jbd2_journal_commit_transaction(journal_t *journal)
+ start_journal_io:
+ 			for (i = 0; i < bufs; i++) {
+ 				struct buffer_head *bh = wbuf[i];
++				//bh->causes = get_cause_list(cause_list); // new ref
++
+ 				/*
+ 				 * Compute checksum.
+ 				 */
+@@ -651,6 +706,13 @@ start_journal_io:
+ 				bh->b_end_io = journal_end_buffer_io_sync;
+ 				submit_bh(WRITE_SYNC, bh);
+ 			}
++			
++#ifdef SPLIT_DEBUG
++			if(is_on_sdb(sb)){
++				//printk("yangsuli: submit %d journal metadata blocks + 1 descriptor block for transaction %d\n", bufs, commit_transaction->t_tid);
++			}
++#endif
++		
+ 			cond_resched();
+ 			stats.run.rs_blocks_logged += bufs;
+ 
+@@ -689,7 +751,7 @@ start_journal_io:
+ 	if (JBD2_HAS_INCOMPAT_FEATURE(journal,
+ 				      JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT)) {
+ 		err = journal_submit_commit_record(journal, commit_transaction,
+-						 &cbh, crc32_sum);
++						 &cbh, crc32_sum, cause_list);
+ 		if (err)
+ 			__jbd2_journal_abort_hard(journal);
+ 	}
+@@ -810,17 +872,37 @@ wait_for_iobuf:
+ 	if (!JBD2_HAS_INCOMPAT_FEATURE(journal,
+ 				       JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT)) {
+ 		err = journal_submit_commit_record(journal, commit_transaction,
+-						&cbh, crc32_sum);
++						&cbh, crc32_sum, cause_list);
+ 		if (err)
+ 			__jbd2_journal_abort_hard(journal);
+ 	}
++
++
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	if (cbh)
+ 		err = journal_wait_on_commit_record(journal, cbh);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: journal_wait_on_commit_record take %d ms\n",get_time_diff(&wait_end, &wait_start)); 
++	}
++
++
++	do_gettimeofday(&wait_start);
++#endif
+ 	if (JBD2_HAS_INCOMPAT_FEATURE(journal,
+ 				      JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT) &&
+ 	    journal->j_flags & JBD2_BARRIER) {
+ 		blkdev_issue_flush(journal->j_dev, GFP_NOFS, NULL);
+ 	}
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: journal_blkdev_issue_flush take %d ms\n",get_time_diff(&wait_end, &wait_start)); 
++	}
++#endif
+ 
+ 	if (err)
+ 		jbd2_journal_abort(journal, err);
+@@ -1046,9 +1128,12 @@ restart_loop:
+ 	if (commit_transaction->t_checkpoint_list == NULL &&
+ 	    commit_transaction->t_checkpoint_io_list == NULL) {
+ 		__jbd2_journal_drop_transaction(journal, commit_transaction);
+-		kfree(commit_transaction);
++		jbd2_free_transaction(commit_transaction);
+ 	}
+ 	spin_unlock(&journal->j_list_lock);
+ 	write_unlock(&journal->j_state_lock);
+ 	wake_up(&journal->j_wait_done_commit);
++
++	put_cause_list(cause_list);
++
+ }
+diff --git a/fs/jbd2/journal.c b/fs/jbd2/journal.c
+index 17b04fc..cd3a69b 100644
+--- a/fs/jbd2/journal.c
++++ b/fs/jbd2/journal.c
+@@ -51,6 +51,7 @@
+ #include <asm/uaccess.h>
+ #include <asm/page.h>
+ #include <asm/system.h>
++#include <linux/cause_tags.h>
+ 
+ EXPORT_SYMBOL(jbd2_journal_extend);
+ EXPORT_SYMBOL(jbd2_journal_stop);
+@@ -2096,6 +2097,8 @@ static struct journal_head *journal_alloc_journal_head(void)
+ 
+ static void journal_free_journal_head(struct journal_head *jh)
+ {
++	put_cause_list(jh->causes);
++
+ #ifdef CONFIG_JBD2_DEBUG
+ 	atomic_dec(&nr_journal_heads);
+ 	memset(jh, JBD2_POISON_FREE, sizeof(*jh));
+@@ -2167,7 +2170,8 @@ repeat:
+ 			jbd_unlock_bh_journal_head(bh);
+ 			goto repeat;
+ 		}
+-
++		
++		new_jh->causes = NULL;
+ 		jh = new_jh;
+ 		new_jh = NULL;		/* We consumed it */
+ 		set_buffer_jbd(bh);
+diff --git a/fs/jbd2/revoke.c b/fs/jbd2/revoke.c
+index 69fd935..91f5c40 100644
+--- a/fs/jbd2/revoke.c
++++ b/fs/jbd2/revoke.c
+@@ -89,6 +89,7 @@
+ #include <linux/bio.h>
+ #endif
+ #include <linux/log2.h>
++#include <linux/cause_tags.h>
+ 
+ static struct kmem_cache *jbd2_revoke_record_cache;
+ static struct kmem_cache *jbd2_revoke_table_cache;
+@@ -120,7 +121,8 @@ struct jbd2_revoke_table_s
+ static void write_one_revoke_record(journal_t *, transaction_t *,
+ 				    struct journal_head **, int *,
+ 				    struct jbd2_revoke_record_s *, int);
+-static void flush_descriptor(journal_t *, struct journal_head *, int, int);
++static void flush_descriptor(journal_t *, struct journal_head *,
++							 int, int, struct cause_list* cause_list);
+ #endif
+ 
+ /* Utility functions to maintain the revoke table */
+@@ -501,7 +503,8 @@ void jbd2_journal_switch_revoke_table(journal_t *journal)
+  */
+ void jbd2_journal_write_revoke_records(journal_t *journal,
+ 				       transaction_t *transaction,
+-				       int write_op)
++				       int write_op,
++				       struct cause_list* cause_list)
+ {
+ 	struct journal_head *descriptor;
+ 	struct jbd2_revoke_record_s *record;
+@@ -532,7 +535,7 @@ void jbd2_journal_write_revoke_records(journal_t *journal,
+ 		}
+ 	}
+ 	if (descriptor)
+-		flush_descriptor(journal, descriptor, offset, write_op);
++		flush_descriptor(journal, descriptor, offset, write_op, cause_list);
+ 	jbd_debug(1, "Wrote %d revoke records\n", count);
+ }
+ 
+@@ -565,7 +568,7 @@ static void write_one_revoke_record(journal_t *journal,
+ 	/* Make sure we have a descriptor with space left for the record */
+ 	if (descriptor) {
+ 		if (offset == journal->j_blocksize) {
+-			flush_descriptor(journal, descriptor, offset, write_op);
++			flush_descriptor(journal, descriptor, offset, write_op, NULL);
+ 			descriptor = NULL;
+ 		}
+ 	}
+@@ -610,7 +613,8 @@ static void write_one_revoke_record(journal_t *journal,
+ 
+ static void flush_descriptor(journal_t *journal,
+ 			     struct journal_head *descriptor,
+-			     int offset, int write_op)
++			     int offset, int write_op, 
++			     struct cause_list* cause_list)
+ {
+ 	jbd2_journal_revoke_header_t *header;
+ 	struct buffer_head *bh = jh2bh(descriptor);
+@@ -625,6 +629,7 @@ static void flush_descriptor(journal_t *journal,
+ 	set_buffer_jwrite(bh);
+ 	BUFFER_TRACE(bh, "write");
+ 	set_buffer_dirty(bh);
++	bh->causes = get_cause_list(cause_list); // new ref
+ 	write_dirty_buffer(bh, write_op);
+ }
+ #endif
+diff --git a/fs/jbd2/transaction.c b/fs/jbd2/transaction.c
+index 18ea4d9..627ae55 100644
+--- a/fs/jbd2/transaction.c
++++ b/fs/jbd2/transaction.c
+@@ -29,10 +29,19 @@
+ #include <linux/backing-dev.h>
+ #include <linux/bug.h>
+ #include <linux/module.h>
++#include <linux/kthread.h>
++#include <linux/cause_tags.h>
++
+ 
+ static void __jbd2_journal_temp_unlink_buffer(struct journal_head *jh);
+ static void __jbd2_journal_unfile_buffer(struct journal_head *jh);
+ 
++void jbd2_free_transaction(transaction_t *transaction) {
++	if (transaction)
++		put_cause_list(transaction->causes);
++	kfree(transaction);
++}
++
+ /*
+  * jbd2_get_transaction: obtain a new transaction_t object.
+  *
+@@ -72,6 +81,8 @@ jbd2_get_transaction(journal_t *journal, transaction_t *transaction)
+ 	transaction->t_max_wait = 0;
+ 	transaction->t_start = jiffies;
+ 
++	transaction->causes = new_cause_list();
++
+ 	return transaction;
+ }
+ 
+@@ -162,7 +173,7 @@ repeat:
+ 	if (is_journal_aborted(journal) ||
+ 	    (journal->j_errno != 0 && !(journal->j_flags & JBD2_ACK_ERR))) {
+ 		read_unlock(&journal->j_state_lock);
+-		kfree(new_transaction);
++		jbd2_free_transaction(new_transaction);
+ 		return -EROFS;
+ 	}
+ 
+@@ -285,7 +296,7 @@ repeat:
+ 	read_unlock(&journal->j_state_lock);
+ 
+ 	lock_map_acquire(&handle->h_lockdep_map);
+-	kfree(new_transaction);
++	jbd2_free_transaction(new_transaction);
+ 	return 0;
+ }
+ 
+@@ -1099,6 +1110,21 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
+ 		handle->h_buffer_credits--;
+ 	}
+ 
++	cause_list_add(&transaction->causes, current);
++	cause_list_add(&jh->causes, current);
++
++	/*
++	if(current->causes){
++		struct io_cause *cause;
++		list_for_each_entry(cause, &current->causes->items, list){
++			printk("bh: %p add cause %d\n", bh, cause->account_id);
++		}
++
++	}else{
++		printk("bh: %p add cause %d\n", current->account_id);
++	}
++	*/
++
+ 	/*
+ 	 * fastpath, to avoid expensive locking.  If this buffer is already
+ 	 * on the running transaction's metadata list there is nothing to do.
+@@ -1125,6 +1151,7 @@ int jbd2_journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
+ 		goto out_unlock_bh;
+ 	}
+ 
++
+ 	set_buffer_jbddirty(bh);
+ 
+ 	/*
+@@ -1390,6 +1417,8 @@ int jbd2_journal_stop(handle_t *handle)
+ 	 * writes.  No point in waiting for joiners in that case.
+ 	 */
+ 	pid = current->pid;
++	
++#ifndef SPLIT_NODEP
+ 	if (handle->h_sync && journal->j_last_sync_writer != pid) {
+ 		u64 commit_time, trans_time;
+ 
+@@ -1414,6 +1443,7 @@ int jbd2_journal_stop(handle_t *handle)
+ 			schedule_hrtimeout(&expires, HRTIMER_MODE_ABS);
+ 		}
+ 	}
++#endif
+ 
+ 	if (handle->h_sync)
+ 		transaction->t_synchronous_commit = 1;
+@@ -2048,6 +2078,7 @@ void __jbd2_journal_file_buffer(struct journal_head *jh,
+ 		__jbd2_journal_temp_unlink_buffer(jh);
+ 	else
+ 		jbd2_journal_grab_journal_head(bh);
++
+ 	jh->b_transaction = transaction;
+ 
+ 	switch (jlist) {
+@@ -2056,6 +2087,21 @@ void __jbd2_journal_file_buffer(struct journal_head *jh,
+ 		J_ASSERT_JH(jh, !jh->b_frozen_data);
+ 		return;
+ 	case BJ_Metadata:
++#ifndef DISABLE_CAUSES
++		// don't blame ourselves for things like commit records, even
++		// though we write them!  This should be blamed on the processes
++		// that added records to start with.  Do this by checking if the
++		// thread is associated with the jbd2 journal.
++		/*
++		if (current->flags&PF_KTHREAD &&
++			kthread_data(current) == transaction->t_journal) {
++			// skip
++		} else {
++			cause_list_add(&transaction->causes, current);
++		}
++		*/
++#endif
++
+ 		transaction->t_nr_buffers++;
+ 		list = &transaction->t_buffers;
+ 		break;
+diff --git a/fs/namei.c b/fs/namei.c
+index 9680cef..0fd9b12 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -34,6 +34,7 @@
+ #include <linux/fs_struct.h>
+ #include <linux/posix_acl.h>
+ #include <asm/uaccess.h>
++#include <linux/blkdev.h>
+ 
+ #include "internal.h"
+ 
+@@ -1981,21 +1982,47 @@ void unlock_rename(struct dentry *p1, struct dentry *p2)
+ int vfs_create(struct inode *dir, struct dentry *dentry, int mode,
+ 		struct nameidata *nd)
+ {
+-	int error = may_create(dir, dentry);
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module* module;
++	void* opaque = NULL;
++
++	int error;
++
++	// intercept entry
++	get_elevator_call_info_from_inode(dir, &rq, &module, &sops);
++	if(sops.create_entry_fn){
++		error = sops.create_entry_fn(rq, dir, dentry, mode, &opaque, sops.sched_uniq);
++		if (error) {
++			BUG_ON(!module);
++			module_put(module);
++			return error;
++		}
++	}
++	
++	error = may_create(dir, dentry);
+ 
+ 	if (error)
+-		return error;
++		goto out;
+ 
+-	if (!dir->i_op->create)
+-		return -EACCES;	/* shouldn't it be ENOSYS? */
++	if (!dir->i_op->create) {
++		error = -EACCES;	/* shouldn't it be ENOSYS? */
++		goto out;
++	}
+ 	mode &= S_IALLUGO;
+ 	mode |= S_IFREG;
+ 	error = security_inode_create(dir, dentry, mode);
+ 	if (error)
+-		return error;
++		goto out;
+ 	error = dir->i_op->create(dir, dentry, mode, nd);
+ 	if (!error)
+ 		fsnotify_create(dir, dentry);
++ out:
++	if(sops.create_return_fn)
++		sops.create_return_fn(rq, opaque, error, sops.sched_uniq);
++	if(module)
++		module_put(module);
++
+ 	return error;
+ }
+ 
+@@ -2545,7 +2572,13 @@ SYSCALL_DEFINE3(mknod, const char __user *, filename, int, mode, unsigned, dev)
+ 
+ int vfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+ {
+-	int error = may_create(dir, dentry);
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module* module;
++	void* opaque = NULL;
++
++	//it's ok to check permission upfront before queuing since no I/O is performed
++	int error = may_create(dir, dentry); 
+ 
+ 	if (error)
+ 		return error;
+@@ -2553,14 +2586,31 @@ int vfs_mkdir(struct inode *dir, struct dentry *dentry, int mode)
+ 	if (!dir->i_op->mkdir)
+ 		return -EPERM;
+ 
++	// intercept entry
++	get_elevator_call_info_from_inode(dir, &rq, &module, &sops);
++	if(sops.mkdir_entry_fn){
++		error = sops.mkdir_entry_fn(rq, dir, dentry, mode, &opaque, sops.sched_uniq);
++		if (error) {
++			BUG_ON(!module);
++			module_put(module);
++			return error;
++		}
++	}
++
+ 	mode &= (S_IRWXUGO|S_ISVTX);
+ 	error = security_inode_mkdir(dir, dentry, mode);
+ 	if (error)
+-		return error;
++		goto out;
+ 
+ 	error = dir->i_op->mkdir(dir, dentry, mode);
+ 	if (!error)
+ 		fsnotify_mkdir(dir, dentry);
++
++out:
++	if(sops.mkdir_return_fn)
++		sops.mkdir_return_fn(rq, opaque, error, sops.sched_uniq);
++	if(module)
++		module_put(module);
+ 	return error;
+ }
+ 
+diff --git a/fs/read_write.c b/fs/read_write.c
+index 5ad4248..617ecf6 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -9,12 +9,13 @@
+ #include <linux/fcntl.h>
+ #include <linux/file.h>
+ #include <linux/uio.h>
++#include <linux/module.h>
+ #include <linux/fsnotify.h>
+ #include <linux/security.h>
+-#include <linux/module.h>
+ #include <linux/syscalls.h>
+ #include <linux/pagemap.h>
+ #include <linux/splice.h>
++#include <linux/blkdev.h>
+ #include "read_write.h"
+ 
+ #include <asm/uaccess.h>
+@@ -419,6 +420,10 @@ EXPORT_SYMBOL(do_sync_write);
+ 
+ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
+ {
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module* module;
++	void* opaque = NULL;
+ 	ssize_t ret;
+ 
+ 	if (!(file->f_mode & FMODE_WRITE))
+@@ -428,6 +433,17 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
+ 	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
+ 		return -EFAULT;
+ 
++	// intercept entry
++	get_elevator_call_info(file, &rq, &module, &sops);
++	if (sops.write_entry_fn) {
++		ret = sops.write_entry_fn(rq, file, count, pos, &opaque, sops.sched_uniq);
++		if (ret) {
++			BUG_ON(!module);
++			module_put(module);
++			return ret;
++		}
++	}
++
+ 	ret = rw_verify_area(WRITE, file, pos, count);
+ 	if (ret >= 0) {
+ 		count = ret;
+@@ -442,6 +458,12 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
+ 		inc_syscw(current);
+ 	}
+ 
++	// intercept exit
++	if (sops.write_return_fn)
++		sops.write_return_fn(rq, opaque, ret, sops.sched_uniq);
++	if (module)
++		module_put(module);
++
+ 	return ret;
+ }
+ 
+diff --git a/fs/sync.c b/fs/sync.c
+index 101b8ef..5ef06e5 100644
+--- a/fs/sync.c
++++ b/fs/sync.c
+@@ -6,8 +6,8 @@
+ #include <linux/file.h>
+ #include <linux/fs.h>
+ #include <linux/slab.h>
+-#include <linux/module.h>
+ #include <linux/namei.h>
++#include <linux/module.h>
+ #include <linux/sched.h>
+ #include <linux/writeback.h>
+ #include <linux/syscalls.h>
+@@ -16,6 +16,7 @@
+ #include <linux/quotaops.h>
+ #include <linux/buffer_head.h>
+ #include <linux/backing-dev.h>
++#include <linux/blkdev.h>
+ #include "internal.h"
+ 
+ #define VALID_FLAGS (SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE| \
+@@ -165,9 +166,35 @@ SYSCALL_DEFINE1(syncfs, int, fd)
+  */
+ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
+ {
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module *module;
++	void* opaque = NULL;
++	int rv;
++
+ 	if (!file->f_op || !file->f_op->fsync)
+ 		return -EINVAL;
+-	return file->f_op->fsync(file, start, end, datasync);
++
++	// intercept entry
++	get_elevator_call_info(file, &rq, &module, &sops);
++	if (sops.fsync_entry_fn) {
++		rv = sops.fsync_entry_fn(rq, file, datasync, &opaque, sops.sched_uniq);
++		if (rv) {
++			BUG_ON(!module);
++			module_put(module);
++			return rv;
++		}
++	}
++
++	rv = file->f_op->fsync(file, start, end, datasync);
++
++	// intercept exit
++	if (sops.fsync_return_fn)
++		sops.fsync_return_fn(rq, opaque, rv, sops.sched_uniq);
++	if (module)
++		module_put(module);
++
++	return rv;
+ }
+ EXPORT_SYMBOL(vfs_fsync_range);
+ 
+diff --git a/fs/xfs/xfs_aops.c b/fs/xfs/xfs_aops.c
+index b367581..8661fd5 100644
+--- a/fs/xfs/xfs_aops.c
++++ b/fs/xfs/xfs_aops.c
+@@ -38,6 +38,8 @@
+ #include <linux/pagevec.h>
+ #include <linux/writeback.h>
+ 
++#include <linux/cause_tags.h>
++
+ void
+ xfs_count_page_state(
+ 	struct page		*page,
+@@ -441,6 +443,7 @@ xfs_start_page_writeback(
+ 
+ static inline int bio_add_buffer(struct bio *bio, struct buffer_head *bh)
+ {
++	move_causes_bh_to_bio(bh, bio);
+ 	return bio_add_page(bio, bh->b_page, bh->b_size, bh_offset(bh));
+ }
+ 
+diff --git a/fs/xfs/xfs_inode.c b/fs/xfs/xfs_inode.c
+index 755ee81..0d535a8 100644
+--- a/fs/xfs/xfs_inode.c
++++ b/fs/xfs/xfs_inode.c
+@@ -1372,6 +1372,8 @@ xfs_itruncate_data(
+ 		if (ip->i_size != new_size) {
+ 			ip->i_d.di_size = new_size;
+ 			ip->i_size = new_size;
++			//yangsuli
++			//here dirties data...
+ 			xfs_trans_log_inode(*tpp, ip, XFS_ILOG_CORE);
+ 		}
+ 	}
+@@ -1478,6 +1480,11 @@ xfs_iunlink(
+ 	agi->agi_unlinked[bucket_index] = cpu_to_be32(agino);
+ 	offset = offsetof(xfs_agi_t, agi_unlinked) +
+ 		(sizeof(xfs_agino_t) * bucket_index);
++	//yangsuli
++	//here we dirty
++	//but note that here the dirtier created/modified bp?
++	//is it true that who ever calls trans_log_buf dirtied the buf?
++	//possible...
+ 	xfs_trans_log_buf(tp, agibp, offset,
+ 			  (offset + sizeof(xfs_agino_t) - 1));
+ 	return 0;
+@@ -2593,6 +2600,7 @@ xfs_iflush(
+ 	if (error)
+ 		goto cluster_corrupt_out;
+ 
++	//yangsuli: here dirty
+ 	if (flags & SYNC_WAIT)
+ 		error = xfs_bwrite(bp);
+ 	else
+diff --git a/fs/xfs/xfs_vnodeops.c b/fs/xfs/xfs_vnodeops.c
+index ee98d0b..2ab5ede 100644
+--- a/fs/xfs/xfs_vnodeops.c
++++ b/fs/xfs/xfs_vnodeops.c
+@@ -946,6 +946,8 @@ xfs_create(
+ 	 * the transaction cancel unlocking dp so don't do it explicitly in the
+ 	 * error path.
+ 	 */
++	//yangsuli
++	//here is where metadata actually got dirtied....
+ 	xfs_trans_ijoin(tp, dp, XFS_ILOCK_EXCL);
+ 	unlock_dp_on_error = B_FALSE;
+ 
+diff --git a/include/linux/blk_types.h b/include/linux/blk_types.h
+index 4053cbd..df530f8 100644
+--- a/include/linux/blk_types.h
++++ b/include/linux/blk_types.h
+@@ -72,6 +72,8 @@ struct bio {
+ 
+ 	bio_destructor_t	*bi_destructor;	/* destructor */
+ 
++	struct cause_list_list *cll;
++
+ 	/*
+ 	 * We can inline a number of vecs at the end of the bio, to avoid
+ 	 * double allocations for a small number of bio_vecs. This member
+diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
+index ff039f0..6d2faf7 100644
+--- a/include/linux/blkdev.h
++++ b/include/linux/blkdev.h
+@@ -8,6 +8,7 @@
+ #include <linux/genhd.h>
+ #include <linux/list.h>
+ #include <linux/timer.h>
++#include <linux/module.h>
+ #include <linux/workqueue.h>
+ #include <linux/pagemap.h>
+ #include <linux/backing-dev.h>
+@@ -18,6 +19,7 @@
+ #include <linux/gfp.h>
+ #include <linux/bsg.h>
+ #include <linux/smp.h>
++#include <linux/module.h>
+ 
+ #include <asm/scatterlist.h>
+ 
+@@ -106,6 +108,7 @@ struct request {
+ 		struct rb_node rb_node;	/* sort/lookup */
+ 		void *completion_data;
+ 	};
++	struct rb_node expire_rb_node;
+ 
+ 	/*
+ 	 * Three pointers are available for the IO schedulers, if they need
+@@ -387,6 +390,9 @@ struct request_queue {
+ 	/* Throttle data */
+ 	struct throtl_data *td;
+ #endif
++
++	// this allows us to identify when schedulers have switched
++	int sched_uniq;
+ };
+ 
+ #define QUEUE_FLAG_QUEUED	1	/* uses generic tag queueing */
+@@ -1358,4 +1364,21 @@ static inline bool blk_needs_flush_plug(struct task_struct *tsk)
+ 
+ #endif /* CONFIG_BLOCK */
+ 
++#include <linux/elevator.h>
++struct request_queue;
++
++struct request_queue *inode_to_request_queue(struct inode *inode);
++
++void get_elevator_call_info_from_inode(struct inode* inode,
++										  struct request_queue **rq,
++										  struct module **module,
++										  struct elevator_syscall_ops *sops); 
++
++
++void get_elevator_call_info(struct file* filp,
++										  struct request_queue **rq,
++										  struct module **module,
++										  struct elevator_syscall_ops *sops); 
++
++
+ #endif
+diff --git a/include/linux/buffer_head.h b/include/linux/buffer_head.h
+index 458f497..27dd19f 100644
+--- a/include/linux/buffer_head.h
++++ b/include/linux/buffer_head.h
+@@ -72,6 +72,9 @@ struct buffer_head {
+ 	struct address_space *b_assoc_map;	/* mapping this buffer is
+ 						   associated with */
+ 	atomic_t b_count;		/* users using this buffer_head */
++
++	spinlock_t causes_lock;
++	struct cause_list* causes;
+ };
+ 
+ /*
+diff --git a/include/linux/cause_tags.h b/include/linux/cause_tags.h
+new file mode 100644
+index 0000000..4951a2d
+--- /dev/null
++++ b/include/linux/cause_tags.h
+@@ -0,0 +1,141 @@
++#ifndef _LINUX_CAUSE_TAGS_H
++#define _LINUX_CAUSE_TAGS_H
++
++#include <linux/list.h>
++#include <linux/kref.h>
++
++
++// uncomment this to disable (nearly) all cause_list
++// code for debugging purposes.
++//
++// #define DISABLE_CAUSES
++
++// uncomment this to disable alloc/free counters
++//#define DISABLE_CAUSES_ALLOC_COUNTERS
++
++// uncomment this to disable magic checks and line tracking for new
++#define DISABLE_CAUSES_DEBUG
++
++struct buffer_head;
++struct bio;
++#define SPLIT_UNKNOWN       (0)
++#define SPLIT_DATA          (1)
++#define SPLIT_JOURNAL       (2)
++#define SPLIT_CHECKPOINT    (3)
++#define SPLIT_ZERO          (4)
++#define SPLIT_JOURNAL_META  (5)
++
++#define CAUSES_MAGIC_GOOD 0xAAAAAAAA
++#define CAUSES_MAGIC_BAD  0xBBBBBBBB
++
++struct io_cause {
++	struct list_head list;
++	int account_id;
++};
++
++struct cause_list_mem_desc{
++	int cause_list_alloc;
++	int cause_list_free;
++	int cause_item_alloc;
++	int cause_item_free;
++};
++
++struct cause_list {
++#ifndef DISABLE_CAUSES_DEBUG
++	unsigned magic;
++	int new_line;
++#endif
++
++	struct kref refcount;
++	int type;                  // (e.g., SPLIT_META)
++	struct list_head items;    // list of io_causes's
++	int item_count;
++
++	// assume one request_queue per buffer.
++	//
++	// when a cause_list is free'd, we may notify the scheduler.
++	// but only if
++	//    callback_q != NULL
++    //   AND
++	//    callback_q->sched_uniq == sched_uniq
++	struct request_queue *callback_q;
++	int sched_uniq;
++	size_t size;
++
++	struct inode* inode;
++
++	// for scheduler to as it pleases
++	long private; // (maybe use as cost estimate)
++};
++
++struct cause_list_list {
++	struct cause_list* uniq_causes;
++	size_t size;
++	int item_count;
++	int item_capacity;
++	struct cause_list *items[0]; // must be last field!
++};
++
++// a cause list with a lock to be used with pages
++struct cause_list_locked {
++    spinlock_t lock;
++    struct cause_list* causes;
++};
++
++#define new_cause_list() __new_cause_list(__LINE__)
++
++#ifndef DISABLE_CAUSES
++
++#ifndef DISABLE_CAUSES_DEBUG
++int cause_list_check(struct cause_list *);
++#else
++static inline int cause_list_check(struct cause_list *cl) { return 0; }
++#endif
++
++void cause_list_debug(void);
++// all of these can accept a NULL cause_list; in this case, they do
++// nothing.  new_cause_list() returns NULL if kmalloc fails.
++struct cause_list* __new_cause_list(int line);
++struct cause_list* get_cause_list(struct cause_list*);
++void put_cause_list(struct cause_list*);
++void put_cause_list_safe(struct cause_list*);
++void add_causes_zero_to_bio(struct bio *, int);
++void move_causes_bh_to_bio(struct buffer_head *, struct bio *);
++int __cause_list_add(struct cause_list*, int);
++int cause_list_add(struct cause_list**, struct task_struct*);
++int cause_list_copy(struct cause_list*, struct cause_list**);
++void set_cause_list_type(struct cause_list*, int);
++
++struct cause_list_list* new_cause_list_list(int item_capacity);
++void del_cause_list_list(struct cause_list_list*);
++void cause_list_list_add(struct cause_list_list*, struct cause_list*);
++
++struct cause_list_mem_desc get_cause_list_mem(void);
++
++#else
++
++// for debugging
++static int cause_list_check(struct cause_list *cl) { return 0; }
++static void cause_list_debug(void) {};
++static struct cause_list* __new_cause_list(int line) { return NULL; }
++static struct cause_list* get_cause_list(struct cause_list* c) { return NULL; }
++static void put_cause_list(struct cause_list* c) {}
++static void put_cause_list_safe(struct cause_list* c) {}
++static void add_causes_zero_to_bio(struct bio *bio, int size) {}
++static void move_causes_bh_to_bio(struct buffer_head *buf,
++										 struct bio *bio) {}
++static int __cause_list_add(struct cause_list* cause_list, int account_id) { return 0; }
++static int cause_list_add(struct cause_list** c,
++							  struct task_struct* t) { return 0;}
++static int cause_list_copy(struct cause_list* from,
++								  struct cause_list** to) { return 0;}
++static void set_cause_list_type(struct cause_list* cl, int type) {}
++
++static struct cause_list_list* new_cause_list_list(int item_capacity) { return NULL; }
++static void del_cause_list_list(struct cause_list_list *cll) {}
++static void cause_list_list_add(struct cause_list_list *cll,
++								struct cause_list *cl) {}
++static struct cause_list_mem_desc get_cause_list_mem(void) {struct cause_list_mem_desc desc; return desc; }
++#endif
++
++#endif
+diff --git a/include/linux/elevator.h b/include/linux/elevator.h
+index 1d0f7a2..7d72b39 100644
+--- a/include/linux/elevator.h
++++ b/include/linux/elevator.h
+@@ -32,6 +32,73 @@ typedef void (elevator_deactivate_req_fn) (struct request_queue *, struct reques
+ typedef void *(elevator_init_fn) (struct request_queue *);
+ typedef void (elevator_exit_fn) (struct elevator_queue *);
+ 
++typedef ssize_t (elevator_read_entry_fn) (struct request_queue *rq,
++										  struct file* filp,
++										  size_t count,
++										  loff_t *pos,
++										  void** opaque,
++										  int sched_uniq);
++
++typedef ssize_t (elevator_write_entry_fn) (struct request_queue *rq,
++										   struct file* filp,
++										   size_t count,
++										   loff_t *pos,
++										   void** opaque,
++										   int sched_uniq);
++
++typedef int (elevator_mkdir_entry_fn) (struct request_queue* rq,
++										   struct inode *dir,
++										   struct dentry *dentry, 
++										   int mode,
++										   void **opaque,
++										   int sched_uniq);
++
++typedef int (elevator_create_entry_fn) (struct request_queue* rq,
++										struct inode *dir,
++										struct dentry *dentry, 
++										int mode,
++										void **opaque,
++										int sched_uniq);
++
++typedef int (elevator_fsync_entry_fn) (struct request_queue *rq,
++									   struct file* filp,
++									   int datasync,
++									   void** opaque,
++									   int sched_uniq);
++										 
++typedef void (elevator_read_return_fn) (struct request_queue *rq,
++										void *opaque,
++										ssize_t rv,
++										int sched_uniq);
++
++typedef void (elevator_write_return_fn) (struct request_queue *rq,
++										 void *opaque,
++										 ssize_t rv,
++										 int sched_uniq);
++
++typedef void (elevator_fsync_return_fn) (struct request_queue *rq,
++										 void *opaque,
++										 int rv,
++										 int sched_uniq);
++
++typedef void (elevator_mkdir_return_fn) (struct request_queue *rq,
++										 void *opaque,
++										 int rv,
++										 int sched_uniq);
++typedef void (elevator_create_return_fn) (struct request_queue *rq,
++										  void *opaque,
++										  int rv,
++										  int sched_uniq);
++
++typedef void (elevator_causes_dirty_fn) (struct request_queue *rq,
++										 struct cause_list* causes,
++										 struct task_struct* new,
++										 struct inode *inode,
++										 long pos);
++
++typedef void (elevator_causes_free_fn) (struct request_queue *rq,
++										struct cause_list* causes);
++
+ struct elevator_ops
+ {
+ 	elevator_merge_fn *elevator_merge_fn;
+@@ -64,6 +131,39 @@ struct elevator_ops
+ 	elevator_init_fn *elevator_init_fn;
+ 	elevator_exit_fn *elevator_exit_fn;
+ 	void (*trim)(struct io_context *);
++
++	// these are called WITHOUT the queue_lock
++	elevator_read_entry_fn *elevator_read_entry_fn;
++	elevator_write_entry_fn *elevator_write_entry_fn;
++	elevator_fsync_entry_fn *elevator_fsync_entry_fn;
++	elevator_mkdir_entry_fn *elevator_mkdir_entry_fn;
++	elevator_create_entry_fn *elevator_create_entry_fn;
++	elevator_read_return_fn *elevator_read_return_fn;
++	elevator_write_return_fn *elevator_write_return_fn;
++	elevator_fsync_return_fn *elevator_fsync_return_fn;
++	elevator_mkdir_return_fn *elevator_mkdir_return_fn;
++	elevator_create_return_fn *elevator_create_return_fn;
++
++	// these are called WITH the queue_lock
++	elevator_causes_dirty_fn *elevator_causes_dirty_fn;
++	// don't take a reference to the cause_list here!
++	elevator_causes_free_fn *elevator_causes_free_fn;
++};
++
++// fields of elevator_ops pertaining to syscalls
++struct elevator_syscall_ops
++{
++	elevator_read_entry_fn *read_entry_fn;
++	elevator_write_entry_fn *write_entry_fn;
++	elevator_fsync_entry_fn *fsync_entry_fn;
++	elevator_mkdir_entry_fn *mkdir_entry_fn;
++	elevator_create_entry_fn *create_entry_fn;
++	elevator_read_return_fn *read_return_fn;
++	elevator_write_return_fn *write_return_fn;
++	elevator_fsync_return_fn *fsync_return_fn;
++	elevator_mkdir_return_fn *mkdir_return_fn;
++	elevator_create_return_fn *create_return_fn;
++	int sched_uniq;
+ };
+ 
+ #define ELV_NAME_MAX	(16)
+@@ -105,6 +205,7 @@ struct elevator_queue
+  */
+ extern void elv_dispatch_sort(struct request_queue *, struct request *);
+ extern void elv_dispatch_add_tail(struct request_queue *, struct request *);
++extern void elv_dispatch_add_head(struct request_queue *, struct request *);
+ extern void elv_add_request(struct request_queue *, struct request *, int);
+ extern void __elv_add_request(struct request_queue *, struct request *, int);
+ extern int elv_merge(struct request_queue *, struct request **, struct bio *);
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index a276817..ef587b9 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -839,6 +839,9 @@ struct inode {
+ 	atomic_t		i_readcount; /* struct files open RO */
+ #endif
+ 	void			*i_private; /* fs or device private pointer */
++
++	// for scheduler to use as it pleases
++	long i_private1; // (maybe use as last write offset)
+ };
+ 
+ static inline int inode_unhashed(struct inode *inode)
+diff --git a/include/linux/hashtable.h b/include/linux/hashtable.h
+new file mode 100644
+index 0000000..532f347
+--- /dev/null
++++ b/include/linux/hashtable.h
+@@ -0,0 +1,192 @@
++/*
++ * Statically sized hash table implementation
++ * (C) 2012  Sasha Levin <levinsasha928@gmail.com>
++ */
++
++#ifndef _LINUX_HASHTABLE_H
++#define _LINUX_HASHTABLE_H
++
++#include <linux/list.h>
++#include <linux/types.h>
++#include <linux/kernel.h>
++#include <linux/hash.h>
++#include <linux/rculist.h>
++
++#define DEFINE_HASHTABLE(name, bits)						\
++	struct hlist_head name[1 << (bits)] =					\
++			{ [0 ... ((1 << (bits)) - 1)] = HLIST_HEAD_INIT }
++
++#define DECLARE_HASHTABLE(name, bits)                                   	\
++	struct hlist_head name[1 << (bits)]
++
++#define HASH_SIZE(name) (ARRAY_SIZE(name))
++#define HASH_BITS(name) ilog2(HASH_SIZE(name))
++
++/* Use hash_32 when possible to allow for fast 32bit hashing in 64bit kernels. */
++#define hash_min(val, bits)							\
++	(sizeof(val) <= 4 ? hash_32(val, bits) : hash_long(val, bits))
++
++static inline void __hash_init(struct hlist_head *ht, unsigned int sz)
++{
++	unsigned int i;
++
++	for (i = 0; i < sz; i++)
++		INIT_HLIST_HEAD(&ht[i]);
++}
++
++/**
++ * hash_init - initialize a hash table
++ * @hashtable: hashtable to be initialized
++ *
++ * Calculates the size of the hashtable from the given parameter, otherwise
++ * same as hash_init_size.
++ *
++ * This has to be a macro since HASH_BITS() will not work on pointers since
++ * it calculates the size during preprocessing.
++ */
++#define hash_init(hashtable) __hash_init(hashtable, HASH_SIZE(hashtable))
++
++/**
++ * hash_add - add an object to a hashtable
++ * @hashtable: hashtable to add to
++ * @node: the &struct hlist_node of the object to be added
++ * @key: the key of the object to be added
++ */
++#define hash_add(hashtable, node, key)						\
++	hlist_add_head(node, &hashtable[hash_min(key, HASH_BITS(hashtable))])
++
++/**
++ * hash_add_rcu - add an object to a rcu enabled hashtable
++ * @hashtable: hashtable to add to
++ * @node: the &struct hlist_node of the object to be added
++ * @key: the key of the object to be added
++ */
++#define hash_add_rcu(hashtable, node, key)					\
++	hlist_add_head_rcu(node, &hashtable[hash_min(key, HASH_BITS(hashtable))])
++
++/**
++ * hash_hashed - check whether an object is in any hashtable
++ * @node: the &struct hlist_node of the object to be checked
++ */
++static inline bool hash_hashed(struct hlist_node *node)
++{
++	return !hlist_unhashed(node);
++}
++
++static inline bool __hash_empty(struct hlist_head *ht, unsigned int sz)
++{
++	unsigned int i;
++
++	for (i = 0; i < sz; i++)
++		if (!hlist_empty(&ht[i]))
++			return false;
++
++	return true;
++}
++
++/**
++ * hash_empty - check whether a hashtable is empty
++ * @hashtable: hashtable to check
++ *
++ * This has to be a macro since HASH_BITS() will not work on pointers since
++ * it calculates the size during preprocessing.
++ */
++#define hash_empty(hashtable) __hash_empty(hashtable, HASH_SIZE(hashtable))
++
++/**
++ * hash_del - remove an object from a hashtable
++ * @node: &struct hlist_node of the object to remove
++ */
++static inline void hash_del(struct hlist_node *node)
++{
++	hlist_del_init(node);
++}
++
++/**
++ * hash_del_rcu - remove an object from a rcu enabled hashtable
++ * @node: &struct hlist_node of the object to remove
++ */
++static inline void hash_del_rcu(struct hlist_node *node)
++{
++	hlist_del_init_rcu(node);
++}
++
++/**
++ * hash_for_each - iterate over a hashtable
++ * @name: hashtable to iterate
++ * @bkt: integer to use as bucket loop cursor
++ * @node: the &struct list_head to use as a loop cursor for each entry
++ * @obj: the type * to use as a loop cursor for each entry
++ * @member: the name of the hlist_node within the struct
++ */
++#define hash_for_each(name, bkt, node, obj, member)				\
++	for ((bkt) = 0, node = NULL; node == NULL && (bkt) < HASH_SIZE(name); (bkt)++)\
++		hlist_for_each_entry(obj, node, &name[bkt], member)
++
++/**
++ * hash_for_each_rcu - iterate over a rcu enabled hashtable
++ * @name: hashtable to iterate
++ * @bkt: integer to use as bucket loop cursor
++ * @node: the &struct list_head to use as a loop cursor for each entry
++ * @obj: the type * to use as a loop cursor for each entry
++ * @member: the name of the hlist_node within the struct
++ */
++#define hash_for_each_rcu(name, bkt, node, obj, member)				\
++	for ((bkt) = 0, node = NULL; node == NULL && (bkt) < HASH_SIZE(name); (bkt)++)\
++		hlist_for_each_entry_rcu(obj, node, &name[bkt], member)
++
++/**
++ * hash_for_each_safe - iterate over a hashtable safe against removal of
++ * hash entry
++ * @name: hashtable to iterate
++ * @bkt: integer to use as bucket loop cursor
++ * @node: the &struct hlist_node to use as a loop cursor for each entry
++ * @tmp: a &struct hlist_node used for temporary storage
++ * @obj: the type * to use as a loop cursor for each entry
++ * @member: the name of the hlist_node within the struct
++ */
++#define hash_for_each_safe(name, bkt, node, tmp, obj, member)			\
++	for ((bkt) = 0, node = NULL; node == NULL && (bkt) < HASH_SIZE(name); (bkt)++)\
++		hlist_for_each_entry_safe(obj, node, tmp, &name[bkt], member)
++
++/**
++ * hash_for_each_possible - iterate over all possible objects hashing to the
++ * same bucket
++ * @name: hashtable to iterate
++ * @obj: the type * to use as a loop cursor for each entry
++ * @node: the &struct list_head to use as a loop cursor for each entry
++ * @member: the name of the hlist_node within the struct
++ * @key: the key of the objects to iterate over
++ */
++#define hash_for_each_possible(name, obj, node, member, key)			\
++	hlist_for_each_entry(obj, node,	&name[hash_min(key, HASH_BITS(name))], member)
++
++/**
++ * hash_for_each_possible_rcu - iterate over all possible objects hashing to the
++ * same bucket in an rcu enabled hashtable
++ * in a rcu enabled hashtable
++ * @name: hashtable to iterate
++ * @obj: the type * to use as a loop cursor for each entry
++ * @node: the &struct list_head to use as a loop cursor for each entry
++ * @member: the name of the hlist_node within the struct
++ * @key: the key of the objects to iterate over
++ */
++#define hash_for_each_possible_rcu(name, obj, node, member, key)		\
++	hlist_for_each_entry_rcu(obj, node, &name[hash_min(key, HASH_BITS(name))], member)
++
++/**
++ * hash_for_each_possible_safe - iterate over all possible objects hashing to the
++ * same bucket safe against removals
++ * @name: hashtable to iterate
++ * @obj: the type * to use as a loop cursor for each entry
++ * @node: the &struct list_head to use as a loop cursor for each entry
++ * @tmp: a &struct used for temporary storage
++ * @member: the name of the hlist_node within the struct
++ * @key: the key of the objects to iterate over
++ */
++#define hash_for_each_possible_safe(name, obj, node, tmp, member, key)		\
++	hlist_for_each_entry_safe(obj, node, tmp,				\
++		&name[hash_min(key, HASH_BITS(name))], member)
++
++
++#endif
+diff --git a/include/linux/init_task.h b/include/linux/init_task.h
+index cdde2b3..9b46868 100644
+--- a/include/linux/init_task.h
++++ b/include/linux/init_task.h
+@@ -150,6 +150,8 @@ extern struct task_group root_task_group;
+  */
+ #define INIT_TASK(tsk)	\
+ {									\
++	.causes     = NULL,                     \
++	.account_id     = ATOMIC_INIT(0),	\
+ 	.state		= 0,						\
+ 	.stack		= &init_thread_info,				\
+ 	.usage		= ATOMIC_INIT(2),				\
+diff --git a/include/linux/jbd2.h b/include/linux/jbd2.h
+index a153ed5..dd98e12 100644
+--- a/include/linux/jbd2.h
++++ b/include/linux/jbd2.h
+@@ -606,6 +606,8 @@ struct transaction_s
+ 	 * structures associated with the transaction
+ 	 */
+ 	struct list_head	t_private_list;
++
++	struct cause_list* causes;
+ };
+ 
+ struct transaction_run_stats_s {
+@@ -981,6 +983,8 @@ int __jbd2_journal_clean_checkpoint_list(journal_t *journal);
+ int __jbd2_journal_remove_checkpoint(struct journal_head *);
+ void __jbd2_journal_insert_checkpoint(struct journal_head *, transaction_t *);
+ 
++/* Transaction management */
++void jbd2_free_transaction(transaction_t *);
+ 
+ /*
+  * Triggers
+@@ -1145,7 +1149,8 @@ extern void	   jbd2_journal_destroy_revoke(journal_t *);
+ extern int	   jbd2_journal_revoke (handle_t *, unsigned long long, struct buffer_head *);
+ extern int	   jbd2_journal_cancel_revoke(handle_t *, struct journal_head *);
+ extern void	   jbd2_journal_write_revoke_records(journal_t *,
+-						     transaction_t *, int);
++												 transaction_t *, int,
++												 struct cause_list*);
+ 
+ /* Recovery revoke support */
+ extern int	jbd2_journal_set_revoke(journal_t *, unsigned long long, tid_t);
+diff --git a/include/linux/journal-head.h b/include/linux/journal-head.h
+index 423cb6d..da35043 100644
+--- a/include/linux/journal-head.h
++++ b/include/linux/journal-head.h
+@@ -102,6 +102,8 @@ struct journal_head {
+ 
+ 	/* Trigger type for the committing transaction's frozen data */
+ 	struct jbd2_buffer_trigger_type *b_frozen_triggers;
++
++	struct cause_list* causes;
+ };
+ 
+ #endif		/* JOURNAL_HEAD_H_INCLUDED */
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index de3a321..c81af14 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -149,7 +149,13 @@ struct page {
+ 	 */
+ 	void *shadow;
+ #endif
++
++    // cause list for btrfs
++#ifndef DISABLE_CAUSES
++        void* locked_causes;
++#endif
+ }
++
+ /*
+  * If another subsystem starts using the double word pairing for atomic
+  * operations on struct page then it must change the #if to ensure
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 8204898..aabc3ab 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -1576,6 +1576,13 @@ struct task_struct {
+ #ifdef CONFIG_HAVE_HW_BREAKPOINT
+ 	atomic_t ptrace_bp_refcnt;
+ #endif
++
++	// sometimes a task acts as a proxy for other threads (e.g.,
++	// a flush thread acting on behalf of other tasks that did
++	// delayed allocation).
++	struct cause_list* causes;
++
++	atomic_t account_id;
+ };
+ 
+ /* Future-safe accessor for struct task_struct's cpus_allowed. */
+diff --git a/include/linux/writeback.h b/include/linux/writeback.h
+index 7e85d45..cda9c44 100644
+--- a/include/linux/writeback.h
++++ b/include/linux/writeback.h
+@@ -181,7 +181,6 @@ balance_dirty_pages_ratelimited(struct address_space *mapping)
+ 
+ typedef int (*writepage_t)(struct page *page, struct writeback_control *wbc,
+ 				void *data);
+-
+ int generic_writepages(struct address_space *mapping,
+ 		       struct writeback_control *wbc);
+ void tag_pages_for_writeback(struct address_space *mapping,
+@@ -194,7 +193,6 @@ void set_page_dirty_balance(struct page *page, int page_mkwrite);
+ void writeback_set_ratelimit(void);
+ void tag_pages_for_writeback(struct address_space *mapping,
+ 			     pgoff_t start, pgoff_t end);
+-
+ void account_page_redirty(struct page *page);
+ 
+ /* pdflush.c */
+diff --git a/kernel/hrtimer.c b/kernel/hrtimer.c
+index 60f7e32..5920516 100644
+--- a/kernel/hrtimer.c
++++ b/kernel/hrtimer.c
+@@ -1624,6 +1624,7 @@ out:
+ 	destroy_hrtimer_on_stack(&t.timer);
+ 	return ret;
+ }
++EXPORT_SYMBOL_GPL(hrtimer_nanosleep);
+ 
+ SYSCALL_DEFINE2(nanosleep, struct timespec __user *, rqtp,
+ 		struct timespec __user *, rmtp)
+diff --git a/kernel/kthread.c b/kernel/kthread.c
+index b6d216a..855939e 100644
+--- a/kernel/kthread.c
++++ b/kernel/kthread.c
+@@ -70,6 +70,7 @@ void *kthread_data(struct task_struct *task)
+ {
+ 	return to_kthread(task)->data;
+ }
++EXPORT_SYMBOL(kthread_data);
+ 
+ static int kthread(void *_create)
+ {
+diff --git a/mm/filemap.c b/mm/filemap.c
+index 556858c..55c62da 100644
+--- a/mm/filemap.c
++++ b/mm/filemap.c
+@@ -776,6 +776,10 @@ repeat:
+ 		page = __page_cache_alloc(gfp_mask);
+ 		if (!page)
+ 			return NULL;
++
++#ifndef DISABLE_CAUSES
++		page->locked_causes = NULL;
++#endif
+ 		/*
+ 		 * We want a regular kernel memory (not highmem or DMA etc)
+ 		 * allocation for the radix tree nodes, but we need to honour
+diff --git a/mm/page-writeback.c b/mm/page-writeback.c
+index ea3f83b..a0569d7 100644
+--- a/mm/page-writeback.c
++++ b/mm/page-writeback.c
+@@ -1679,6 +1679,7 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
+ 		ret = generic_writepages(mapping, wbc);
+ 	return ret;
+ }
++EXPORT_SYMBOL(do_writepages);
+ 
+ /**
+  * write_one_page - write out a single page and optionally wait on I/O

@@ -1,0 +1,12 @@
+--- linux-3.2.51/include/linux/init_task.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/include/linux/init_task.h	2015-09-01 05:42:28.000000000 +0200
+@@ -150,6 +150,8 @@
+  */
+ #define INIT_TASK(tsk)	\
+ {									\
++	.causes     = NULL,                     \
++	.account_id     = ATOMIC_INIT(0),	\
+ 	.state		= 0,						\
+ 	.stack		= &init_thread_info,				\
+ 	.usage		= ATOMIC_INIT(2),				\
+diff -rubBN linux-3.2.51/include/linux/jbd2.h ../split-release/release/linux-3.2.51/include/linux/jbd2.h

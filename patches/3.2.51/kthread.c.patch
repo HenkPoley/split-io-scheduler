@@ -1,0 +1,11 @@
+--- linux-3.2.51/kernel/kthread.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/kernel/kthread.c	2015-09-01 05:42:51.000000000 +0200
+@@ -70,6 +70,7 @@
+ {
+ 	return to_kthread(task)->data;
+ }
++EXPORT_SYMBOL(kthread_data);
+ 
+ static int kthread(void *_create)
+ {
+diff -rubBN linux-3.2.51/mm/filemap.c ../split-release/release/linux-3.2.51/mm/filemap.c

@@ -1,0 +1,12 @@
+--- linux-3.2.51/include/linux/blk_types.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/include/linux/blk_types.h	2015-09-01 05:42:28.000000000 +0200
+@@ -72,6 +72,8 @@
+ 
+ 	bio_destructor_t	*bi_destructor;	/* destructor */
+ 
++	struct cause_list_list *cll;
++
+ 	/*
+ 	 * We can inline a number of vecs at the end of the bio, to avoid
+ 	 * double allocations for a small number of bio_vecs. This member
+diff -rubBN linux-3.2.51/include/linux/buffer_head.h ../split-release/release/linux-3.2.51/include/linux/buffer_head.h

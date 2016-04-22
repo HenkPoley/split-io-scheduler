@@ -1,0 +1,31 @@
+--- linux-3.2.51/include/linux/jbd2.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/include/linux/jbd2.h	2015-09-01 05:42:28.000000000 +0200
+@@ -606,6 +606,8 @@
+ 	 * structures associated with the transaction
+ 	 */
+ 	struct list_head	t_private_list;
++
++	struct cause_list* causes;
+ };
+ 
+ struct transaction_run_stats_s {
+@@ -981,6 +983,8 @@
+ int __jbd2_journal_remove_checkpoint(struct journal_head *);
+ void __jbd2_journal_insert_checkpoint(struct journal_head *, transaction_t *);
+ 
++/* Transaction management */
++void jbd2_free_transaction(transaction_t *);
+ 
+ /*
+  * Triggers
+@@ -1145,7 +1149,8 @@
+ extern int	   jbd2_journal_revoke (handle_t *, unsigned long long, struct buffer_head *);
+ extern int	   jbd2_journal_cancel_revoke(handle_t *, struct journal_head *);
+ extern void	   jbd2_journal_write_revoke_records(journal_t *,
+-						     transaction_t *, int);
++												 transaction_t *, int,
++												 struct cause_list*);
+ 
+ /* Recovery revoke support */
+ extern int	jbd2_journal_set_revoke(journal_t *, unsigned long long, tid_t);
+diff -rubBN linux-3.2.51/include/linux/journal-head.h ../split-release/release/linux-3.2.51/include/linux/journal-head.h

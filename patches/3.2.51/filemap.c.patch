@@ -1,0 +1,14 @@
+--- linux-3.2.51/mm/filemap.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/mm/filemap.c	2015-09-01 05:42:46.000000000 +0200
+@@ -776,6 +776,10 @@
+ 		page = __page_cache_alloc(gfp_mask);
+ 		if (!page)
+ 			return NULL;
++
++#ifndef DISABLE_CAUSES
++		page->locked_causes = NULL;
++#endif
+ 		/*
+ 		 * We want a regular kernel memory (not highmem or DMA etc)
+ 		 * allocation for the radix tree nodes, but we need to honour
+diff -rubBN linux-3.2.51/mm/page-writeback.c ../split-release/release/linux-3.2.51/mm/page-writeback.c

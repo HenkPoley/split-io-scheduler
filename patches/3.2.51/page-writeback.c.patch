@@ -1,0 +1,11 @@
+--- linux-3.2.51/mm/page-writeback.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/mm/page-writeback.c	2015-09-01 05:42:46.000000000 +0200
+@@ -1679,6 +1679,7 @@
+ 		ret = generic_writepages(mapping, wbc);
+ 	return ret;
+ }
++EXPORT_SYMBOL(do_writepages);
+ 
+ /**
+  * write_one_page - write out a single page and optionally wait on I/O
+diff -rubBN linux-3.2.51/scripts/genksyms/keywords.hash.c ../split-release/release/linux-3.2.51/scripts/genksyms/keywords.hash.c

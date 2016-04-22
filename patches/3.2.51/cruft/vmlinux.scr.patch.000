@@ -1,0 +1,12 @@
+--- linux-3.2.51/arch/sh/boot/romimage/vmlinux.scr	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/arch/sh/boot/romimage/vmlinux.scr	1970-01-01 01:00:00.000000000 +0100
+@@ -1,8 +0,0 @@
+-SECTIONS
+-{
+-  .text : {
+-	zero_page_pos = .;
+-	*(.data)
+-	end_data = .;
+-	}
+-}
+diff -rubBN linux-3.2.51/block/blk-core.c ../split-release/release/linux-3.2.51/block/blk-core.c

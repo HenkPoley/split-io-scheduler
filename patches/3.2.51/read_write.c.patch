@@ -1,0 +1,60 @@
+--- linux-3.2.51/fs/read_write.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/read_write.c	2015-09-01 05:42:49.000000000 +0200
+@@ -9,12 +9,13 @@
+ #include <linux/fcntl.h>
+ #include <linux/file.h>
+ #include <linux/uio.h>
++#include <linux/module.h>
+ #include <linux/fsnotify.h>
+ #include <linux/security.h>
+-#include <linux/module.h>
+ #include <linux/syscalls.h>
+ #include <linux/pagemap.h>
+ #include <linux/splice.h>
++#include <linux/blkdev.h>
+ #include "read_write.h"
+ 
+ #include <asm/uaccess.h>
+@@ -419,6 +420,10 @@
+ 
+ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
+ {
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module* module;
++	void* opaque = NULL;
+ 	ssize_t ret;
+ 
+ 	if (!(file->f_mode & FMODE_WRITE))
+@@ -428,6 +433,17 @@
+ 	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
+ 		return -EFAULT;
+ 
++	// intercept entry
++	get_elevator_call_info(file, &rq, &module, &sops);
++	if (sops.write_entry_fn) {
++		ret = sops.write_entry_fn(rq, file, count, pos, &opaque, sops.sched_uniq);
++		if (ret) {
++			BUG_ON(!module);
++			module_put(module);
++			return ret;
++		}
++	}
++
+ 	ret = rw_verify_area(WRITE, file, pos, count);
+ 	if (ret >= 0) {
+ 		count = ret;
+@@ -442,6 +458,12 @@
+ 		inc_syscw(current);
+ 	}
+ 
++	// intercept exit
++	if (sops.write_return_fn)
++		sops.write_return_fn(rq, opaque, ret, sops.sched_uniq);
++	if (module)
++		module_put(module);
++
+ 	return ret;
+ }
+ 
+diff -rubBN linux-3.2.51/fs/split_account.h ../split-release/release/linux-3.2.51/fs/split_account.h

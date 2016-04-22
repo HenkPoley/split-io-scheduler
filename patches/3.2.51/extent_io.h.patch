@@ -1,0 +1,11 @@
+--- linux-3.2.51/fs/btrfs/extent_io.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/btrfs/extent_io.h	2015-09-01 05:42:48.000000000 +0200
+@@ -188,6 +188,7 @@
+ 			 struct extent_state **cached, gfp_t mask);
+ int try_lock_extent(struct extent_io_tree *tree, u64 start, u64 end,
+ 		    gfp_t mask);
++void print_page_info(struct page *page);
+ int extent_read_full_page(struct extent_io_tree *tree, struct page *page,
+ 			  get_extent_t *get_extent, int mirror_num);
+ int __init extent_io_init(void);
+diff -rubBN linux-3.2.51/fs/btrfs/file.c ../split-release/release/linux-3.2.51/fs/btrfs/file.c

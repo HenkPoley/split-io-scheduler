@@ -1,0 +1,34 @@
+--- linux-3.2.51/fs/inode.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/inode.c	2015-09-01 05:42:49.000000000 +0200
+@@ -227,6 +227,8 @@
+ 		return NULL;
+ 	}
+ 
++	inode->i_private1 = 0;
++
+ 	return inode;
+ }
+ 
+@@ -1456,7 +1458,10 @@
+ 		return;
+ 
+ 	inode->i_atime = now;
++
++#ifndef SPLIT_NODEP
+ 	mark_inode_dirty_sync(inode);
++#endif
+ 	mnt_drop_write(mnt);
+ }
+ EXPORT_SYMBOL(touch_atime);
+@@ -1507,7 +1512,10 @@
+ 		inode->i_ctime = now;
+ 	if (sync_it & S_MTIME)
+ 		inode->i_mtime = now;
++
++#ifndef SPLIT_NODEP
+ 	mark_inode_dirty_sync(inode);
++#endif
+ 	mnt_drop_write(file->f_path.mnt);
+ }
+ EXPORT_SYMBOL(file_update_time);
+diff -rubBN linux-3.2.51/fs/io_batch.h ../split-release/release/linux-3.2.51/fs/io_batch.h

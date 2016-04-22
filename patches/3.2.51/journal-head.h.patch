@@ -1,0 +1,12 @@
+--- linux-3.2.51/include/linux/journal-head.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/include/linux/journal-head.h	2015-09-01 05:42:28.000000000 +0200
+@@ -102,6 +102,8 @@
+ 
+ 	/* Trigger type for the committing transaction's frozen data */
+ 	struct jbd2_buffer_trigger_type *b_frozen_triggers;
++
++	struct cause_list* causes;
+ };
+ 
+ #endif		/* JOURNAL_HEAD_H_INCLUDED */
+diff -rubBN linux-3.2.51/include/linux/mm_types.h ../split-release/release/linux-3.2.51/include/linux/mm_types.h

@@ -1,0 +1,9 @@
+--- linux-3.2.51/.gitignore	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/.gitignore	2015-09-01 05:42:29.000000000 +0200
+@@ -84,3 +84,5 @@
+ *.orig
+ *~
+ \#*#
++/build.sh
++/install.sh
+diff -rubBN linux-3.2.51/include/linux/blkdev.h ../split-release/release/linux-3.2.51/include/linux/blkdev.h

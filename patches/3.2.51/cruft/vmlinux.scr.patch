@@ -1,0 +1,14 @@
+--- linux-3.2.51/arch/sh/boot/compressed/vmlinux.scr	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/arch/sh/boot/compressed/vmlinux.scr	1970-01-01 01:00:00.000000000 +0100
+@@ -1,10 +0,0 @@
+-SECTIONS
+-{
+-  .rodata..compressed : {
+-	input_len = .;
+-	LONG(input_data_end - input_data) input_data = .;
+-	*(.data)
+-	output_len = . - 4;
+-	input_data_end = .;
+-	}
+-}
+diff -rubBN linux-3.2.51/arch/sh/boot/romimage/vmlinux.scr ../split-release/release/linux-3.2.51/arch/sh/boot/romimage/vmlinux.scr

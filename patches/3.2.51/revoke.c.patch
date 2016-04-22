@@ -1,0 +1,67 @@
+--- linux-3.2.51/fs/jbd2/revoke.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/jbd2/revoke.c	2015-09-01 05:42:48.000000000 +0200
+@@ -89,6 +89,7 @@
+ #include <linux/bio.h>
+ #endif
+ #include <linux/log2.h>
++#include <linux/cause_tags.h>
+ 
+ static struct kmem_cache *jbd2_revoke_record_cache;
+ static struct kmem_cache *jbd2_revoke_table_cache;
+@@ -120,7 +121,8 @@
+ static void write_one_revoke_record(journal_t *, transaction_t *,
+ 				    struct journal_head **, int *,
+ 				    struct jbd2_revoke_record_s *, int);
+-static void flush_descriptor(journal_t *, struct journal_head *, int, int);
++static void flush_descriptor(journal_t *, struct journal_head *,
++							 int, int, struct cause_list* cause_list);
+ #endif
+ 
+ /* Utility functions to maintain the revoke table */
+@@ -501,7 +503,8 @@
+  */
+ void jbd2_journal_write_revoke_records(journal_t *journal,
+ 				       transaction_t *transaction,
+-				       int write_op)
++				       int write_op,
++				       struct cause_list* cause_list)
+ {
+ 	struct journal_head *descriptor;
+ 	struct jbd2_revoke_record_s *record;
+@@ -532,7 +535,7 @@
+ 		}
+ 	}
+ 	if (descriptor)
+-		flush_descriptor(journal, descriptor, offset, write_op);
++		flush_descriptor(journal, descriptor, offset, write_op, cause_list);
+ 	jbd_debug(1, "Wrote %d revoke records\n", count);
+ }
+ 
+@@ -565,7 +568,7 @@
+ 	/* Make sure we have a descriptor with space left for the record */
+ 	if (descriptor) {
+ 		if (offset == journal->j_blocksize) {
+-			flush_descriptor(journal, descriptor, offset, write_op);
++			flush_descriptor(journal, descriptor, offset, write_op, NULL);
+ 			descriptor = NULL;
+ 		}
+ 	}
+@@ -610,7 +613,8 @@
+ 
+ static void flush_descriptor(journal_t *journal,
+ 			     struct journal_head *descriptor,
+-			     int offset, int write_op)
++			     int offset, int write_op, 
++			     struct cause_list* cause_list)
+ {
+ 	jbd2_journal_revoke_header_t *header;
+ 	struct buffer_head *bh = jh2bh(descriptor);
+@@ -625,6 +629,7 @@
+ 	set_buffer_jwrite(bh);
+ 	BUFFER_TRACE(bh, "write");
+ 	set_buffer_dirty(bh);
++	bh->causes = get_cause_list(cause_list); // new ref
+ 	write_dirty_buffer(bh, write_op);
+ }
+ #endif
+diff -rubBN linux-3.2.51/fs/jbd2/transaction.c ../split-release/release/linux-3.2.51/fs/jbd2/transaction.c

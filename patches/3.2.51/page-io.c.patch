@@ -1,0 +1,27 @@
+--- linux-3.2.51/fs/ext4/page-io.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/ext4/page-io.c	2015-09-01 05:42:48.000000000 +0200
+@@ -24,6 +24,7 @@
+ #include <linux/workqueue.h>
+ #include <linux/kernel.h>
+ #include <linux/slab.h>
++#include <linux/cause_tags.h>
+ 
+ #include "ext4_jbd2.h"
+ #include "xattr.h"
+@@ -347,8 +349,15 @@
+ 	io->io_end->size += bh->b_size;
+ 	io->io_next_block++;
+ 	ret = bio_add_page(io->io_bio, bh->b_page, bh->b_size, bh_offset(bh));
++
++
++
+ 	if (ret != bh->b_size)
+ 		goto submit_and_retry;
++
++	// I think this path is only for writes
++	move_causes_bh_to_bio(bh, io->io_bio);
++
+ 	if ((io_end->num_io_pages == 0) ||
+ 	    (io_end->pages[io_end->num_io_pages-1] != io_page)) {
+ 		io_end->pages[io_end->num_io_pages++] = io_page;
+diff -rubBN linux-3.2.51/fs/inode.c ../split-release/release/linux-3.2.51/fs/inode.c

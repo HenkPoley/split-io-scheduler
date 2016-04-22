@@ -1,0 +1,17 @@
+--- linux-3.2.51/include/linux/mm_types.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/include/linux/mm_types.h	2015-09-01 05:42:28.000000000 +0200
+@@ -149,7 +149,13 @@
+ 	 */
+ 	void *shadow;
+ #endif
++
++    // cause list for btrfs
++#ifndef DISABLE_CAUSES
++        void* locked_causes;
++#endif
+ }
++
+ /*
+  * If another subsystem starts using the double word pairing for atomic
+  * operations on struct page then it must change the #if to ensure
+diff -rubBN linux-3.2.51/include/linux/sched.h ../split-release/release/linux-3.2.51/include/linux/sched.h
