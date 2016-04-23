@@ -1,7 +1,7 @@
 # split-io-scheduler
 Back/forward ported patches based on https://research.cs.wisc.edu/adsl/Software/split/
 
-# Build instructions
+## Build instructions
 
 Apply the patches for your kernel version:
 
@@ -30,7 +30,7 @@ sudo dpkg -i ../*-split-level-io*1*.deb
 sudo reboot
 ```
 
-# Modules
+## Modules
 The modules/ directory contains the kernel module sources of the actual schedulers. The makefile depends on that you run the split-level-io kernel.
 
 ```
@@ -56,7 +56,7 @@ If you want to install updated header files (e.g., because you added a syscall)
 sudo make headers_install INSTALL_HDR_PATH=/usr/include
 ```
 
-# Notes about the code
+## Notes about the code
 
 * include/linux/hashtable.h is backported from Linux 3.7 (or later)
 * The variable expire_rb_node is used in the modules, not in the kernel
