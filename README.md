@@ -21,11 +21,11 @@ Copy config_yangsuli (salvaged from release tarball) to .config (note the dot). 
 `make menuconfig`, and then make necessary changes in configuration. For example it is required to compile BTRFS into the kernel (=y), build will fail as module. This is already set in the ubuntu config
 
 ```
-make -j`nprocs`
-##make modules -j`nprocs`
+make -j`nproc`
+##make modules -j`nproc`
 #sudo make modules_install
 #sudo make install
-fake_root make-kpkg -j`nprocs` --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
+fake_root make-kpkg -j`nproc` --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
 sudo dpkg -i ../*-split-level-io*1*.deb
 sudo reboot
 ```
@@ -42,11 +42,11 @@ make insert (inserts just afq as example)
 After initial compiling, if you updated some code in the kernel:
 
 ```
-make -j`nprocs`
-##make modules -j`nprocs`
+make -j`nproc`
+##make modules -j`nproc`
 #sudo make modules_install
 #sudo make install
-fakeroot make-kpkg -j`nprocs` --initrd --append-to-version=-split-level-io --revision=2 kernel_image kernel_headers
+fakeroot make-kpkg -j`nproc` --initrd --append-to-version=-split-level-io --revision=2 kernel_image kernel_headers
 sudo dpkg -i ../*-split-level-io*2*.deb
 sudo reboot
 ```
