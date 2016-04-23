@@ -1,22 +1,26 @@
 # split-io-scheduler
 Back/forward ported patches based on https://research.cs.wisc.edu/adsl/Software/split/
 
-# Build instructions:
+# Build instructions
 
-Apply the patches for your kernel version.
+Apply the patches for your kernel version:
 
+```
 cd your-kernel-tree
 for i in <this path>/patches/<kernel version>/*.patch*; do patch -p1 < $i; done
-
+```
 
 or:
 
+```
 quilt import <this path>/patches/<kernel version>/*patch*
 quilt push -a
+```
 
 Copy config_yangsuli (salvaged from release tarball) to .config (note the dot). This config does not boot a default Ubuntu 12.04.0 (precise) install, try the config_ubuntu* instead.
 `make menuconfig`, and then make necessary changes in configuration. For example it is required to compile BTRFS into the kernel (=y), build will fail as module. This is already set in the ubuntu config
 
+```
 make -j4 (based on how many cores you have)
 ##make modules -j4
 #sudo make modules_install
@@ -24,13 +28,16 @@ make -j4 (based on how many cores you have)
 fake_root make-kpkg -j4 --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
 sudo dpkg -i ../*-split-level-io*1*.deb
 sudo reboot
+```
 
 # Modules
 The modules/ directory contains the kernel module sources of the actual schedulers. The makefile depends on that you run the split-level-io kernel.
 
+```
 cd modules
 make
 make insert (inserts just afq as example)
+```
 
 After initial compiling, if you updated some code in the kernel:
 
