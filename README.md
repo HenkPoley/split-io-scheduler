@@ -21,11 +21,11 @@ Copy config_yangsuli (salvaged from release tarball) to .config (note the dot). 
 `make menuconfig`, and then make necessary changes in configuration. For example it is required to compile BTRFS into the kernel (=y), build will fail as module. This is already set in the ubuntu config
 
 ```
-make -j4 (based on how many cores you have)
-##make modules -j4
+make -j`nprocs`
+##make modules -j`nprocs`
 #sudo make modules_install
 #sudo make install
-fake_root make-kpkg -j4 --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
+fake_root make-kpkg -j`nprocs` --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
 sudo dpkg -i ../*-split-level-io*1*.deb
 sudo reboot
 ```
@@ -41,18 +41,23 @@ make insert (inserts just afq as example)
 
 After initial compiling, if you updated some code in the kernel:
 
-make -j4
-##make modules -j4
+```
+make -j`nprocs`
+##make modules -j`nprocs`
 #sudo make modules_install
 #sudo make install
-fakeroot make-kpkg -j4 --initrd --append-to-version=-split-level-io --revision=2 kernel_image kernel_headers
+fakeroot make-kpkg -j`nprocs` --initrd --append-to-version=-split-level-io --revision=2 kernel_image kernel_headers
 sudo dpkg -i ../*-split-level-io*2*.deb
 sudo reboot
+```
 
 If you want to install updated header files (e.g., because you added a syscall)
+```
 sudo make headers_install INSTALL_HDR_PATH=/usr/include
+```
 
 # Notes about the code
+
 * include/linux/hashtable.h is backported from Linux 3.7 (or later)
 * The variable expire_rb_node is used in the modules, not in the kernel
 * xfs_vnodeops.c.patch just contains a comment about dirtying data
