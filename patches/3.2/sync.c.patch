@@ -1,0 +1,58 @@
+--- linux-3.2.51/fs/sync.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/sync.c	2015-09-01 05:42:49.000000000 +0200
+@@ -6,8 +6,8 @@
+ #include <linux/file.h>
+ #include <linux/fs.h>
+ #include <linux/slab.h>
+-#include <linux/module.h>
+ #include <linux/namei.h>
++#include <linux/module.h>
+ #include <linux/sched.h>
+ #include <linux/writeback.h>
+ #include <linux/syscalls.h>
+@@ -16,6 +16,7 @@
+ #include <linux/quotaops.h>
+ #include <linux/buffer_head.h>
+ #include <linux/backing-dev.h>
++#include <linux/blkdev.h>
+ #include "internal.h"
+ 
+ #define VALID_FLAGS (SYNC_FILE_RANGE_WAIT_BEFORE|SYNC_FILE_RANGE_WRITE| \
+@@ -165,9 +166,35 @@
+  */
+ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
+ {
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module *module;
++	void* opaque = NULL;
++	int rv;
++
+ 	if (!file->f_op || !file->f_op->fsync)
+ 		return -EINVAL;
+-	return file->f_op->fsync(file, start, end, datasync);
++
++	// intercept entry
++	get_elevator_call_info(file, &rq, &module, &sops);
++	if (sops.fsync_entry_fn) {
++		rv = sops.fsync_entry_fn(rq, file, datasync, &opaque, sops.sched_uniq);
++		if (rv) {
++			BUG_ON(!module);
++			module_put(module);
++			return rv;
++		}
++	}
++
++	rv = file->f_op->fsync(file, start, end, datasync);
++
++	// intercept exit
++	if (sops.fsync_return_fn)
++		sops.fsync_return_fn(rq, opaque, rv, sops.sched_uniq);
++	if (module)
++		module_put(module);
++
++	return rv;
+ }
+ EXPORT_SYMBOL(vfs_fsync_range);
+ 
+diff -rubBN linux-3.2.51/fs/tmp.c ../split-release/release/linux-3.2.51/fs/tmp.c

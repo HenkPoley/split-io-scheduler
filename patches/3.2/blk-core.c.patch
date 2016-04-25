@@ -1,0 +1,11 @@
+--- linux-3.2.51/block/blk-core.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/block/blk-core.c	2015-09-01 05:42:46.000000000 +0200
+@@ -136,6 +136,7 @@
+ 	rq->__sector = (sector_t) -1;
+ 	INIT_HLIST_NODE(&rq->hash);
+ 	RB_CLEAR_NODE(&rq->rb_node);
++	RB_CLEAR_NODE(&rq->expire_rb_node);
+ 	rq->cmd = rq->__cmd;
+ 	rq->cmd_len = BLK_MAX_CDB;
+ 	rq->tag = -1;
+diff -rubBN linux-3.2.51/block/blk-lib.c ../split-release/release/linux-3.2.51/block/blk-lib.c

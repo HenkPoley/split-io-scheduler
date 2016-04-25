@@ -1,0 +1,20 @@
+--- linux-3.2.51/fs/jbd2/checkpoint.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/jbd2/checkpoint.c	2015-09-01 05:42:48.000000000 +0200
+@@ -348,6 +348,7 @@
+ 		(*batch_count)++;
+ 		if (*batch_count == JBD2_NR_BATCH) {
+ 			spin_unlock(&journal->j_list_lock);
++			printk("yangsuli: journal checkpoint process submit %d blocks\n", *batch_count);
+ 			__flush_batch(journal, batch_count);
+ 			ret = 1;
+ 		}
+@@ -722,7 +723,7 @@
+ 				    transaction->t_tid, stats);
+ 
+ 	__jbd2_journal_drop_transaction(journal, transaction);
+-	kfree(transaction);
++	jbd2_free_transaction(transaction);
+ 
+ 	/* Just in case anybody was waiting for more transactions to be
+            checkpointed... */
+diff -rubBN linux-3.2.51/fs/jbd2/commit.c ../split-release/release/linux-3.2.51/fs/jbd2/commit.c

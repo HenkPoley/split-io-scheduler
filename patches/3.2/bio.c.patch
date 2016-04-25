@@ -1,0 +1,20 @@
+--- linux-3.2.51/fs/bio.c	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/fs/bio.c	2015-09-01 05:42:48.000000000 +0200
+@@ -25,6 +25,7 @@
+ #include <linux/module.h>
+ #include <linux/mempool.h>
+ #include <linux/workqueue.h>
++#include <linux/cause_tags.h>
+ #include <scsi/sg.h>		/* for struct sg_iovec */
+ 
+ #include <trace/events/block.h>
+@@ -234,6 +235,8 @@
+ {
+ 	void *p;
+ 
++	del_cause_list_list(bio->cll);
++
+ 	if (bio_has_allocated_vec(bio))
+ 		bvec_free_bs(bs, bio->bi_io_vec, BIO_POOL_IDX(bio));
+ 
+diff -rubBN linux-3.2.51/fs/btrfs/extent_io.c ../split-release/release/linux-3.2.51/fs/btrfs/extent_io.c

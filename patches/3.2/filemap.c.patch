@@ -1,0 +1,15 @@
+Index: linux-3.2/mm/filemap.c
+===================================================================
+--- linux-3.2.orig/mm/filemap.c	2016-04-25 11:03:59.463221036 +0200
++++ linux-3.2/mm/filemap.c	2016-04-25 11:03:59.456554370 +0200
+@@ -787,6 +787,10 @@
+ 		page = __page_cache_alloc(gfp_mask);
+ 		if (!page)
+ 			return NULL;
++
++#ifndef DISABLE_CAUSES
++		page->locked_causes = NULL;
++#endif
+ 		/*
+ 		 * We want a regular kernel memory (not highmem or DMA etc)
+ 		 * allocation for the radix tree nodes, but we need to honour
