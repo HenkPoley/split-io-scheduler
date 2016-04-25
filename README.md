@@ -73,6 +73,8 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * variable i_private1 probably needs a better comment
 * Fixed in 3.4 patch: printf misuse of %d for a size_t complaint during build (should be %zu)
 * Lost track of one of the 'here dirty' *comments* in fs/xfs/xfs_inode.c in Linux v3.5. Ah well..
+* Removed large-ish "SAMER" comment in fs/btrfs/extent_io.c in Linux v3.8 patchset.
+
 
 ## TODO
 
@@ -84,7 +86,6 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * Check that the kernel thread changes do not introduce problems, with KernelThreadSanitizer (Linux 4.x): https://github.com/google/ktsan
 * Maybe cleanup all the commented printk() in block/cfq-iosched.c & fs/btrfs/file.c
 * Why is cfq_latency = 0 in block/cfq-iosched.c (instead of vanilla default 1)
-* Maybe remove large "SAMER" comment in fs/btrfs/extent_io.c
 * Maybe remove the request_sanity_check() in fs/btrfs/extent_io.c. Thought it was used in modules/tbucket.c, but it's not.
 * BUG? It feels to me like the sched_uniq++ construct in block/elevator.c will not work properly in the Linux v3.5 patch. I suspect it was supposed to give every new loaded I/O scheduler (elevator) a new unique ID. From what I can see it always either becomes 1000, 1001, or 1. Because it doesn't track an atomic incrementing counter elsewhere. It just writes on newly created elevator queues. But maybe those inherit pretty much everything from the previous one (?)
 * Since SPLIT_NODEP is not defined, maybe remove the #ifndef SPLIT_NODEP / #endif checks.
@@ -98,5 +99,7 @@ I 'might not' have put changes I've done in later patches back into the older pa
 * 3.3 - elevator->elevator_type to elevator->type, and a fixup around q->sched_uniq in elevator initialization/switching, some whitespace fixes. Compiles, 'section mismatch' warnings in some modules are not caused by this patch. Not tested.
 * 3.4 - Ext4 (jbd2) now also has it's own function to free a transaction, moved the causes list admin call there. Should check if other filesystems also did this change, and I properly added the causes tracking there too. Compiles. 'section mismatch' warning is still not caused by our code. Not tested.
 * 3.5 - lost the insertion point of a *comment* in fs/xfs/xfs_inode.c. Seems that there is nothing that 'dirties' anything after that point anymore. Not tested.
-* 3.6 - Seemed straightforward. Not tested.
-* 3.7 - Seemed straightforward. Not tested.
+* 3.6 - Seemed straightforward. Compiles. Not tested.
+* 3.7 - Seemed straightforward. Compiles. Not tested.
+* 3.8 - Seemed straightforward. Not tested.
+* 3.9 - Dropped a commented printk() in block/cfq-iosched.c

@@ -1,0 +1,12 @@
+Index: linux-3.9/kernel/hrtimer.c
+===================================================================
+--- linux-3.9.orig/kernel/hrtimer.c	2016-04-25 19:56:51.342069020 +0200
++++ linux-3.9/kernel/hrtimer.c	2016-04-25 19:56:51.332069020 +0200
+@@ -1620,6 +1620,7 @@
+ 	destroy_hrtimer_on_stack(&t.timer);
+ 	return ret;
+ }
++EXPORT_SYMBOL_GPL(hrtimer_nanosleep);
+ 
+ SYSCALL_DEFINE2(nanosleep, struct timespec __user *, rqtp,
+ 		struct timespec __user *, rmtp)

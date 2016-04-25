@@ -1,0 +1,69 @@
+Index: linux-3.8/fs/ext4/inode.c
+===================================================================
+--- linux-3.8.orig/fs/ext4/inode.c	2016-04-25 19:35:47.455441380 +0200
++++ linux-3.8/fs/ext4/inode.c	2016-04-25 19:35:47.452108047 +0200
+@@ -37,6 +37,7 @@
+ #include <linux/printk.h>
+ #include <linux/slab.h>
+ #include <linux/ratelimit.h>
++#include <linux/cause_tags.h>
+ 
+ #include "ext4_jbd2.h"
+ #include "xattr.h"
+@@ -1559,7 +1560,7 @@
+  * The function skips space we know is already mapped to disk blocks.
+  *
+  */
+-static void mpage_da_map_and_submit(struct mpage_da_data *mpd)
++static void __mpage_da_map_and_submit(struct mpage_da_data *mpd)
+ {
+ 	int err, blks, get_blocks_flags;
+ 	struct ext4_map_blocks map, *mapp = NULL;
+@@ -1682,6 +1683,14 @@
+ 	mpd->io_done = 1;
+ }
+ 
++static void mpage_da_map_and_submit(struct mpage_da_data *mpd)
++{
++	__mpage_da_map_and_submit(mpd);
++	// we are no longer acting as a proxy for dirty buffers
++	put_cause_list(current->causes);
++	current->causes = new_cause_list();
++}
++
+ #define BH_FLAGS ((1 << BH_Uptodate) | (1 << BH_Mapped) | \
+ 		(1 << BH_Delay) | (1 << BH_Unwritten))
+ 
+@@ -2250,6 +2259,10 @@
+ 					 * with the page in ext4_writepage
+ 					 */
+ 					if (ext4_bh_delay_or_unwritten(NULL, bh)) {
++						// are we a proxy?
++						if (current->causes)
++							cause_list_copy(bh->causes, &current->causes);
++
+ 						mpage_add_bh_to_extent(mpd, logical,
+ 								       bh->b_size,
+ 								       bh->b_state);
+@@ -2346,6 +2359,10 @@
+ 	if (unlikely(sbi->s_mount_flags & EXT4_MF_FS_ABORTED))
+ 		return -EROFS;
+ 
++	// now acting as cause proxy
++	BUG_ON(current->causes);
++	current->causes = new_cause_list();
++
+ 	if (wbc->range_start == 0 && wbc->range_end == LLONG_MAX)
+ 		range_whole = 1;
+ 
+@@ -2487,6 +2504,10 @@
+ 		mapping->writeback_index = done_index;
+ 
+ out_writepages:
++	// done acting as cause proxy
++	put_cause_list(current->causes);
++	current->causes = NULL;
++
+ 	wbc->nr_to_write -= nr_to_writebump;
+ 	wbc->range_start = range_start;
+ 	trace_ext4_da_writepages_result(inode, wbc, ret, pages_written);
