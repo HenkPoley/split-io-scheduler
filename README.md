@@ -80,6 +80,7 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * Fix kernel compilation linking failure with BTRFS / Ext4 / XFS as modules.
 * Test if kernels also boot O:-)
 * Do regression testing with SibylFS if the extra locking does not introduce bugs: https://sibylfs.github.io/
+* Check that the kernel thread changes do not introduce problems, with KernelThreadSanitizer (Linux 4.x): https://github.com/google/ktsan
 
 ## Order of back/forward porting
 
@@ -87,4 +88,4 @@ I 'might not' have put changes I've done in later patches back into the older pa
 
 * 3.2.51 - original, from tarball, excluded some cruft, boots
 * 3.2 - also has trailing whitespace fixes, compiles, not tested
-* 3.3 - elevator->elevator_type to elevator->type, and a fixup around q->sched_uniq in elevator initialization/switching, some whitespace fixes, compiles, not tested
+* 3.3 - elevator->elevator_type to elevator->type, and a fixup around q->sched_uniq in elevator initialization/switching, some whitespace fixes, compiles, 'section mismatch' warnings in some modules are not caused by this patch, not tested
