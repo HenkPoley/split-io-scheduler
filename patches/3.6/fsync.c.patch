@@ -1,0 +1,100 @@
+Index: linux-3.6/fs/ext4/fsync.c
+===================================================================
+--- linux-3.6.orig/fs/ext4/fsync.c	2016-04-25 17:52:26.261114470 +0200
++++ linux-3.6/fs/ext4/fsync.c	2016-04-25 17:52:26.257781137 +0200
+@@ -198,6 +198,26 @@
+  * i_mutex lock is held when entering and exiting this function
+  */
+ 
++#ifdef SPLIT_DEBUG
++static inline int get_time_diff(struct timeval *end, struct timeval *start){
++	return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_usec - start->tv_usec) / 1000;
++}
++
++static int is_on_sdb(struct super_block *sb){
++	if(!sb)
++		return 0;
++	if(!sb->s_bdev)
++		return 0;
++	if(!sb->s_bdev->bd_disk)
++		return 0;
++	if(!sb->s_bdev->bd_disk->disk_name)
++		return 0;
++	if(strcmp(sb->s_bdev->bd_disk->disk_name, "sdf") == 0)
++		return 1;
++	return 0;
++}
++#endif
++
+ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
+ {
+ 	struct inode *inode = file->f_mapping->host;
+@@ -206,12 +226,28 @@
+ 	int ret;
+ 	tid_t commit_tid;
+ 	bool needs_barrier = false;
++#ifdef SPLIT_DEBUG
++	struct timeval wait_start, wait_end;
++	struct timeval wait_start2, wait_end2;
++	struct super_block *sb = inode->i_sb;
+ 
++	do_gettimeofday(&wait_start2);
++#endif
+ 	J_ASSERT(ext4_journal_current_handle() == NULL);
+ 
+ 	trace_ext4_sync_file_enter(file, datasync);
+ 
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	ret = filemap_write_and_wait_range(inode->i_mapping, start, end);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb)){
++		printk("yangsuli: fsync on file %s take %d ms flushing its own file data\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start));
++	}
++#endif
++
+ 	if (ret)
+ 		return ret;
+ 	mutex_lock(&inode->i_mutex);
+@@ -253,12 +289,39 @@
+ 	if (journal->j_flags & JBD2_BARRIER &&
+ 	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
+ 		needs_barrier = true;
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	jbd2_log_start_commit(journal, commit_tid);
+ 	ret = jbd2_log_wait_commit(journal, commit_tid);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: fsync on file %s take %d ms waiting on commit %d\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start), commit_tid);
++	}
++
++	do_gettimeofday(&wait_start);
++#endif
+ 	if (needs_barrier)
+ 		blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
++
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: fsync on file %s take %d ms issue blk_flush\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start));
++	}
++#endif
++
+  out:
+ 	mutex_unlock(&inode->i_mutex);
+ 	trace_ext4_sync_file_exit(inode, ret);
++
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end2);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: ext4_sync_file on file %s take %d ms\n", file->f_dentry->d_name.name, get_time_diff(&wait_end2, &wait_start2));
++	}
++#endif
++
+ 	return ret;
+ }

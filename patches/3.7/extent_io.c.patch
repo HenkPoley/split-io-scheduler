@@ -1,0 +1,189 @@
+Index: linux-3.7/fs/btrfs/extent_io.c
+===================================================================
+--- linux-3.7.orig/fs/btrfs/extent_io.c	2016-04-25 18:18:36.381065988 +0200
++++ linux-3.7/fs/btrfs/extent_io.c	2016-04-25 18:18:36.354399321 +0200
+@@ -22,6 +22,8 @@
+ #include "locking.h"
+ #include "rcu-string.h"
+ 
++#include <linux/cause_tags.h>
++
+ static struct kmem_cache *extent_state_cache;
+ static struct kmem_cache *extent_buffer_cache;
+ 
+@@ -63,6 +65,46 @@
+ 	return btrfs_sb(tree->mapping->host->i_sb);
+ }
+ 
++/*
++For debuging: prints the page information
++*/
++void print_page_info(struct page *page) {
++	struct inode *inode = page->mapping->host;
++	//u64 start = (u64) page->index << PAGE_CACHE_SHIFT;
++	//u64 page_end = start + PAGE_CACHE_SIZE - 1;
++	//u64 end;
++	//struct btrfs_ordered_extent *ordered;
++	struct extent_io_tree *io_tree = &BTRFS_I(inode)->io_tree;
++	struct extent_buffer *eb;
++	unsigned long len;
++	u64 bytenr = page_offset(page);
++
++	printk("### page %ld : ", page->index);
++
++	if(page->locked_causes == NULL){
++	printk("..No causes ");
++	}
++	else{
++	printk("..With causes ");
++	}
++
++	if (page->private == EXTENT_PAGE_PRIVATE){
++		printk("..No extent on private .\n");
++		return;
++	}
++	else{
++	printk("..has extent on private ..");
++	}
++
++	len = page->private >> 2;
++	eb = find_extent_buffer(io_tree, bytenr, len);
++	if (!eb) {
++		printk("..No buffer.\n");
++	} else {
++		printk("..With Buffer.\n");
++	}
++}
++
+ int __init extent_io_init(void)
+ {
+ 	extent_state_cache = kmem_cache_create("btrfs_extent_state",
+@@ -2466,6 +2508,47 @@
+ 	return bio;
+ }
+ 
++static void request_sanity_check(struct bio *bio) {
++	struct cause_list *causes;
++	//struct bio *bio = rq->bio;
++	WARN_ON(bio == NULL);
++	while (bio != NULL) {
++		// (cll set) iff (req is a write)
++		//WARN_ON((bio->cll != NULL) && (rq_data_dir(rq) == READ));
++		//WARN_ON((bio->cll == NULL) && (rq_data_dir(rq) == WRITE));
++		if (bio->cll ) {
++			int cl_count = 0;
++			int cl_bytes = 0;
++			int i;
++			for (i=0; i < bio->cll->item_count; i++) {
++				causes = bio->cll->items[i];
++				if (causes->type != SPLIT_ZERO) {
++					WARN_ON(causes->size != (4 * 1024));
++					// sometimes transactions are commited without any I/O
++					// for processes, so journal cause_list's may be empty
++					if (causes->type != SPLIT_JOURNAL)
++						WARN_ON(causes->item_count == 0);
++				}
++				cl_count++;
++				cl_bytes += causes->size;
++			}
++
++			if(bio->cll->size != bio->bi_size){
++				printk("size not match cll_>size = %zu, bio->size = %d", bio->cll->size, bio->bi_size);
++			}
++/*			if(bio->cll->size != bio->bi_size) {
++				printk(KERN_INFO "mismatch %ld != %d (%d)",
++					   bio->cll->size, bio->bi_size,
++					   bio->cll->item_count);
++			}
++*/
++			WARN_ON(cl_count != bio->cll->item_count);
++			WARN_ON(cl_bytes != bio->cll->size);
++		}
++		bio = bio->bi_next;
++	}
++}
++
+ /*
+  * Since writes are async, they will only return -ENOMEM.
+  * Reads can return the full range of I/O error conditions.
+@@ -2485,6 +2568,17 @@
+ 
+ 	bio_get(bio);
+ 
++	// SAMER
++    /*
++	printk("submit_one_bio : vcnt %d and size %d : ", bio->bi_vcnt, bio->bi_size);
++	print_page_info(page);
++	if(bio->cll)
++		printk("BIO with causes. page %ld\n", page->index);
++	else
++		printk("BIO with NO causes. page %ld\n", page->index);
++
++	WARN_ON(1);
++    */
+ 	if (tree->ops && tree->ops->submit_bio_hook)
+ 		ret = tree->ops->submit_bio_hook(page->mapping->host, rw, bio,
+ 					   mirror_num, bio_flags, start);
+@@ -2510,6 +2604,42 @@
+ 
+ }
+ 
++void copy_causes_page_to_bio(struct page *page, struct bio *bio, size_t page_size) {
++#ifndef DISABLE_CAUSES  /*just to enable search in code for changes*/
++#endif
++	//yangsuli ? why >> 1
++	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 1;
++	struct cause_list_locked* locked_causes = (struct cause_list_locked*) page->locked_causes;
++	if(!locked_causes){
++		return;
++	}
++	if(!(locked_causes->causes)){
++		return;
++	}
++
++	if (!bio->cll)
++		bio->cll = new_cause_list_list(max_pages_per_bio);
++
++	BUG_ON(page->locked_causes == NULL);
++	spin_lock(&locked_causes->lock);
++	if(!(locked_causes->causes)){
++		spin_unlock(&locked_causes->lock);
++		return;
++	}
++
++	WARN_ON(locked_causes->causes->item_count == 0 &&
++				locked_causes->causes->type != SPLIT_JOURNAL);
++
++	locked_causes->causes->size = page_size;
++	cause_list_list_add(bio->cll, locked_causes->causes);
++
++	// free cause list
++	put_cause_list(locked_causes->causes);
++//yangsuli: why???
++	locked_causes->causes = NULL;
++	spin_unlock(&locked_causes->lock);
++}
++
+ static int submit_extent_page(int rw, struct extent_io_tree *tree,
+ 			      struct page *page, sector_t sector,
+ 			      size_t size, unsigned long offset,
+@@ -2537,6 +2667,9 @@
+ 			contig = bio->bi_sector + (bio->bi_size >> 9) ==
+ 				sector;
+ 
++#ifndef DISABLE_CAUSES
++		copy_causes_page_to_bio(page, bio, page_size);
++#endif
+ 		if (prev_bio_flags != bio_flags || !contig ||
+ 		    merge_bio(tree, page, offset, page_size, bio, bio_flags) ||
+ 		    bio_add_page(bio, page, page_size, offset) < page_size) {
+@@ -2559,6 +2692,9 @@
+ 		return -ENOMEM;
+ 
+ 	bio_add_page(bio, page, page_size, offset);
++#ifndef DISABLE_CAUSES
++	copy_causes_page_to_bio(page, bio, page_size);
++#endif
+ 	bio->bi_end_io = end_io_func;
+ 	bio->bi_private = tree;
+ 

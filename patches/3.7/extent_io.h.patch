@@ -1,0 +1,12 @@
+Index: linux-3.7/fs/btrfs/extent_io.h
+===================================================================
+--- linux-3.7.orig/fs/btrfs/extent_io.h	2016-04-25 18:18:39.324399230 +0200
++++ linux-3.7/fs/btrfs/extent_io.h	2016-04-25 18:18:39.294399231 +0200
+@@ -200,6 +200,7 @@
+ int unlock_extent_cached(struct extent_io_tree *tree, u64 start, u64 end,
+ 			 struct extent_state **cached, gfp_t mask);
+ int try_lock_extent(struct extent_io_tree *tree, u64 start, u64 end);
++void print_page_info(struct page *page);
+ int extent_read_full_page(struct extent_io_tree *tree, struct page *page,
+ 			  get_extent_t *get_extent, int mirror_num);
+ int __init extent_io_init(void);

@@ -1,0 +1,13 @@
+--- linux-3.2.51/include/linux/buffer_head.h	2013-09-10 02:57:42.000000000 +0200
++++ ../split-release/release/linux-3.2.51/include/linux/buffer_head.h	2015-09-01 05:42:28.000000000 +0200
+@@ -72,6 +72,9 @@
+ 	struct address_space *b_assoc_map;	/* mapping this buffer is
+ 						   associated with */
+ 	atomic_t b_count;		/* users using this buffer_head */
++
++	spinlock_t causes_lock;
++	struct cause_list* causes;
+ };
+ 
+ /*
+diff -rubBN linux-3.2.51/include/linux/cause_tags.h ../split-release/release/linux-3.2.51/include/linux/cause_tags.h

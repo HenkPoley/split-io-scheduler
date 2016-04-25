@@ -1,0 +1,12 @@
+Index: linux-3.3/kernel/kthread.c
+===================================================================
+--- linux-3.3.orig/kernel/kthread.c	2016-04-25 11:48:20.813138857 +0200
++++ linux-3.3/kernel/kthread.c	2016-04-25 11:48:20.806472191 +0200
+@@ -95,6 +95,7 @@
+ {
+ 	return to_kthread(task)->data;
+ }
++EXPORT_SYMBOL(kthread_data);
+ 
+ static int kthread(void *_create)
+ {
