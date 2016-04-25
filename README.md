@@ -71,21 +71,29 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * The variable expire_rb_node is used in the modules, not in the kernel, gives build warning
 * xfs_vnodeops.c.patch just contains a comment about dirtying data
 * variable i_private1 probably needs a better comment
+* Fixed in 3.4 patch: printf misuse of %d for a size_t complaint during build (should be %zu)
+* Lost track of one of the 'here dirty' *comments* in fs/xfs/xfs_inode.c in Linux v3.5. Ah well..
 
 ## TODO
 
 * Change modules/Makefile so you can also build the modules before booting the kernel.
-* Fix printf misuse of %d for a size_t complaint during build.
 * Merge patches together into sensible patchsets, instead of per file
 * Fix kernel compilation linking failure with BTRFS / Ext4 / XFS as modules.
 * Test if kernels also boot O:-)
 * Do regression testing with SibylFS if the extra locking does not introduce bugs: https://sibylfs.github.io/
 * Check that the kernel thread changes do not introduce problems, with KernelThreadSanitizer (Linux 4.x): https://github.com/google/ktsan
+* Maybe cleanup all the commented printk() in block/cfq-iosched.c & fs/btrfs/file.c
+* Why is cfq_latency = 0 in block/cfq-iosched.c (instead of vanilla default 1)
+* Maybe remove large "SAMER" comment in fs/btrfs/extent_io.c
+* Maybe remove the request_sanity_check() in fs/btrfs/extent_io.c. Thought it was used in modules/tbucket.c, but it's not.
+* It feels to me like the sched_uniq++ construct in block/elevator.c will not work propperly in the Linux v3.5 patch
+* Since SPLIT_NODEP is not defined, maybe remove the #ifndef SPLIT_NODEP / #endif checks.
 
 ## Order of back/forward porting
 
 I 'might not' have put changes I've done in later patches back into the older patches.
 
-* 3.2.51 - original, from tarball, excluded some cruft, boots
-* 3.2 - also has trailing whitespace fixes, compiles, not tested
-* 3.3 - elevator->elevator_type to elevator->type, and a fixup around q->sched_uniq in elevator initialization/switching, some whitespace fixes, compiles, 'section mismatch' warnings in some modules are not caused by this patch, not tested
+* 3.2.51 - original, from tarball, excluded some cruft. Boots.
+* 3.2 - also has trailing whitespace fixes. Compiles. Not tested.
+* 3.3 - elevator->elevator_type to elevator->type, and a fixup around q->sched_uniq in elevator initialization/switching, some whitespace fixes. Compiles, 'section mismatch' warnings in some modules are not caused by this patch. Not tested.
+* 3.4 - Ext4 (jbd2) now also has it's own function to free a transaction, moved the causes list admin call there. Should check if other filesystems also did this change, and I properly added the causes tracking there too. Compiles. 'section mismatch' warning is still not caused by our code. Not tested.

@@ -1,0 +1,214 @@
+Index: linux-3.5/fs/jbd2/commit.c
+===================================================================
+--- linux-3.5.orig/fs/jbd2/commit.c	2016-04-25 17:08:17.334529599 +0200
++++ linux-3.5/fs/jbd2/commit.c	2016-04-25 17:10:25.677858970 +0200
+@@ -28,6 +28,9 @@
+ #include <linux/blkdev.h>
+ #include <linux/bitops.h>
+ #include <trace/events/jbd2.h>
++#include <linux/cause_tags.h>
++
++#define SPLIT_DEBUG
+ 
+ /*
+  * Default IO end handler for temporary BJ_IO buffer_heads.
+@@ -114,7 +117,8 @@
+ static int journal_submit_commit_record(journal_t *journal,
+ 					transaction_t *commit_transaction,
+ 					struct buffer_head **cbh,
+-					__u32 crc32_sum)
++					__u32 crc32_sum,
++					struct cause_list* cause_list)
+ {
+ 	struct journal_head *descriptor;
+ 	struct commit_header *tmp;
+@@ -132,6 +136,7 @@
+ 		return 1;
+ 
+ 	bh = jh2bh(descriptor);
++	bh->causes = get_cause_list(cause_list);
+ 
+ 	tmp = (struct commit_header *)bh->b_data;
+ 	tmp->h_magic = cpu_to_be32(JBD2_MAGIC_NUMBER);
+@@ -191,6 +196,9 @@
+  * use writepages() because with dealyed allocation we may be doing
+  * block allocation in writepages().
+  */
++#ifdef SPLIT_DEBUG
++static int is_on_sdb(struct super_block *sb);
++#endif
+ static int journal_submit_inode_data_buffers(struct address_space *mapping)
+ {
+ 	int ret;
+@@ -250,6 +258,11 @@
+  * transaction if needed.
+  *
+  */
++#ifdef SPLIT_DEBUG
++static inline int get_time_diff(struct timeval *end, struct timeval *start){
++	return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_usec - start->tv_usec) / 1000;
++}
++#endif
+ static int journal_finish_inode_data_buffers(journal_t *journal,
+ 		transaction_t *commit_transaction)
+ {
+@@ -320,6 +333,22 @@
+ 		tag->t_blocknr_high = cpu_to_be32((block >> 31) >> 1);
+ }
+ 
++#ifdef SPLIT_DEBUG
++static int is_on_sdb(struct super_block *sb){
++	if(!sb)
++		return 0;
++	if(!sb->s_bdev)
++		return 0;
++	if(!sb->s_bdev->bd_disk)
++		return 0;
++	if(!sb->s_bdev->bd_disk->disk_name)
++		return 0;
++	if(strcmp(sb->s_bdev->bd_disk->disk_name, "sdf") == 0)
++		return 1;
++	return 0;
++}
++#endif
++
+ static void jbd2_descr_block_csum_set(journal_t *j,
+ 				      struct journal_head *descriptor)
+ {
+@@ -392,6 +421,11 @@
+ 	tid_t first_tid;
+ 	int update_tail;
+ 	int csum_size = 0;
++	struct cause_list* cause_list = NULL;
++#ifdef SPLIT_DEBUG
++	struct super_block *sb = journal->j_private;
++	struct timeval wait_start, wait_end;
++#endif
+ 
+ 	if (JBD2_HAS_INCOMPAT_FEATURE(journal, JBD2_FEATURE_INCOMPAT_CSUM_V2))
+ 		csum_size = sizeof(struct jbd2_journal_block_tail);
+@@ -439,7 +473,14 @@
+ 	stats.run.rs_running = jbd2_time_diff(commit_transaction->t_start,
+ 					      stats.run.rs_locked);
+ 
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	spin_lock(&commit_transaction->t_handle_lock);
++
++	cause_list = get_cause_list(commit_transaction->causes);
++	set_cause_list_type(cause_list, SPLIT_JOURNAL);
++
+ 	while (atomic_read(&commit_transaction->t_updates)) {
+ 		DEFINE_WAIT(wait);
+ 
+@@ -455,6 +496,14 @@
+ 		finish_wait(&journal->j_wait_updates, &wait);
+ 	}
+ 	spin_unlock(&commit_transaction->t_handle_lock);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: j_wait_updates take %d ms\n",get_time_diff(&wait_end, &wait_start));
++	}
++#endif
++
+ 
+ 	J_ASSERT (atomic_read(&commit_transaction->t_outstanding_credits) <=
+ 			journal->j_max_transaction_buffers);
+@@ -540,7 +589,7 @@
+ 
+ 	blk_start_plug(&plug);
+ 	jbd2_journal_write_revoke_records(journal, commit_transaction,
+-					  WRITE_SYNC);
++					  WRITE_SYNC, cause_list);
+ 	blk_finish_plug(&plug);
+ 
+ 	jbd_debug(3, "JBD2: commit phase 2\n");
+@@ -676,6 +725,9 @@
+ 		}
+ 		set_bit(BH_JWrite, &jh2bh(new_jh)->b_state);
+ 		wbuf[bufs++] = jh2bh(new_jh);
++		(jh2bh(new_jh))->causes = jh->causes;
++		jh->causes = NULL;
++		set_cause_list_type((jh2bh(new_jh))->causes, SPLIT_JOURNAL_META);
+ 
+ 		/* Record the new block's tag in the current descriptor
+                    buffer */
+@@ -720,6 +772,8 @@
+ start_journal_io:
+ 			for (i = 0; i < bufs; i++) {
+ 				struct buffer_head *bh = wbuf[i];
++				//bh->causes = get_cause_list(cause_list); // new ref
++
+ 				/*
+ 				 * Compute checksum.
+ 				 */
+@@ -735,6 +789,13 @@
+ 				bh->b_end_io = journal_end_buffer_io_sync;
+ 				submit_bh(WRITE_SYNC, bh);
+ 			}
++
++#ifdef SPLIT_DEBUG
++			if(is_on_sdb(sb)){
++				//printk("yangsuli: submit %d journal metadata blocks + 1 descriptor block for transaction %d\n", bufs, commit_transaction->t_tid);
++			}
++#endif
++
+ 			cond_resched();
+ 			stats.run.rs_blocks_logged += bufs;
+ 
+@@ -793,7 +854,7 @@
+ 	if (JBD2_HAS_INCOMPAT_FEATURE(journal,
+ 				      JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT)) {
+ 		err = journal_submit_commit_record(journal, commit_transaction,
+-						 &cbh, crc32_sum);
++						 &cbh, crc32_sum, cause_list);
+ 		if (err)
+ 			__jbd2_journal_abort_hard(journal);
+ 	}
+@@ -914,17 +975,35 @@
+ 	if (!JBD2_HAS_INCOMPAT_FEATURE(journal,
+ 				       JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT)) {
+ 		err = journal_submit_commit_record(journal, commit_transaction,
+-						&cbh, crc32_sum);
++						&cbh, crc32_sum, cause_list);
+ 		if (err)
+ 			__jbd2_journal_abort_hard(journal);
+ 	}
++
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_start);
++#endif
+ 	if (cbh)
+ 		err = journal_wait_on_commit_record(journal, cbh);
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: journal_wait_on_commit_record take %d ms\n",get_time_diff(&wait_end, &wait_start));
++	}
++
++	do_gettimeofday(&wait_start);
++#endif
+ 	if (JBD2_HAS_INCOMPAT_FEATURE(journal,
+ 				      JBD2_FEATURE_INCOMPAT_ASYNC_COMMIT) &&
+ 	    journal->j_flags & JBD2_BARRIER) {
+ 		blkdev_issue_flush(journal->j_dev, GFP_NOFS, NULL);
+ 	}
++#ifdef SPLIT_DEBUG
++	do_gettimeofday(&wait_end);
++	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
++		printk("yangsuli: journal_blkdev_issue_flush take %d ms\n",get_time_diff(&wait_end, &wait_start));
++	}
++#endif
+ 
+ 	if (err)
+ 		jbd2_journal_abort(journal, err);
+@@ -1157,4 +1236,6 @@
+ 		jbd2_journal_free_transaction(commit_transaction);
+ 
+ 	wake_up(&journal->j_wait_done_commit);
++
++	put_cause_list(cause_list);
+ }

@@ -1,0 +1,14 @@
+Index: linux-3.5/include/linux/fs.h
+===================================================================
+--- linux-3.5.orig/include/linux/fs.h	2016-04-25 17:37:22.737809037 +0200
++++ linux-3.5/include/linux/fs.h	2016-04-25 17:37:22.731142371 +0200
+@@ -857,6 +857,9 @@
+ 	atomic_t		i_readcount; /* struct files open RO */
+ #endif
+ 	void			*i_private; /* fs or device private pointer */
++
++	// for scheduler to use as it pleases
++	long i_private1; // (maybe use as last write offset)
+ };
+ 
+ static inline int inode_unhashed(struct inode *inode)

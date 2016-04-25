@@ -1,0 +1,18 @@
+Index: linux-3.5/include/linux/sched.h
+===================================================================
+--- linux-3.5.orig/include/linux/sched.h	2016-04-25 17:37:59.094474581 +0200
++++ linux-3.5/include/linux/sched.h	2016-04-25 17:37:59.091141247 +0200
+@@ -1583,6 +1583,13 @@
+ 	struct uprobe_task *utask;
+ 	int uprobe_srcu_id;
+ #endif
++
++	// sometimes a task acts as a proxy for other threads (e.g.,
++	// a flush thread acting on behalf of other tasks that did
++	// delayed allocation).
++	struct cause_list* causes;
++
++	atomic_t account_id;
+ };
+ 
+ /* Future-safe accessor for struct task_struct's cpus_allowed. */

@@ -1,0 +1,21 @@
+Index: linux-3.4/fs/bio.c
+===================================================================
+--- linux-3.4.orig/fs/bio.c	2016-04-25 14:46:04.478010390 +0200
++++ linux-3.4/fs/bio.c	2016-04-25 14:46:04.471343723 +0200
+@@ -25,6 +25,7 @@
+ #include <linux/export.h>
+ #include <linux/mempool.h>
+ #include <linux/workqueue.h>
++#include <linux/cause_tags.h>
+ #include <scsi/sg.h>		/* for struct sg_iovec */
+ 
+ #include <trace/events/block.h>
+@@ -234,6 +235,8 @@
+ {
+ 	void *p;
+ 
++	del_cause_list_list(bio->cll);
++
+ 	if (bio_has_allocated_vec(bio))
+ 		bvec_free_bs(bs, bio->bi_io_vec, BIO_POOL_IDX(bio));
+ 

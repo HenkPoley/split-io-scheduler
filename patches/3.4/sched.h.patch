@@ -1,0 +1,18 @@
+Index: linux-3.4/include/linux/sched.h
+===================================================================
+--- linux-3.4.orig/include/linux/sched.h	2016-04-25 14:47:50.758007108 +0200
++++ linux-3.4/include/linux/sched.h	2016-04-25 14:47:50.754673776 +0200
+@@ -1617,6 +1617,13 @@
+ #ifdef CONFIG_HAVE_HW_BREAKPOINT
+ 	atomic_t ptrace_bp_refcnt;
+ #endif
++
++	// sometimes a task acts as a proxy for other threads (e.g.,
++	// a flush thread acting on behalf of other tasks that did
++	// delayed allocation).
++	struct cause_list* causes;
++
++	atomic_t account_id;
+ };
+ 
+ /* Future-safe accessor for struct task_struct's cpus_allowed. */

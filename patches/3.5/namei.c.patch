@@ -1,0 +1,122 @@
+Index: linux-3.5/fs/namei.c
+===================================================================
+--- linux-3.5.orig/fs/namei.c	2016-04-25 17:37:49.044474891 +0200
++++ linux-3.5/fs/namei.c	2016-04-25 17:37:49.037808224 +0200
+@@ -15,6 +15,7 @@
+  */
+ 
+ #include <linux/init.h>
++#include <linux/module.h>
+ #include <linux/export.h>
+ #include <linux/kernel.h>
+ #include <linux/slab.h>
+@@ -35,6 +36,7 @@
+ #include <linux/fs_struct.h>
+ #include <linux/posix_acl.h>
+ #include <asm/uaccess.h>
++#include <linux/blkdev.h>
+ 
+ #include "internal.h"
+ #include "mount.h"
+@@ -2088,21 +2090,47 @@
+ int vfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+ 		struct nameidata *nd)
+ {
+-	int error = may_create(dir, dentry);
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module* module;
++	void* opaque = NULL;
+ 
+-	if (error)
++	int error;
++
++	// intercept entry
++	get_elevator_call_info_from_inode(dir, &rq, &module, &sops);
++	if(sops.create_entry_fn){
++		error = sops.create_entry_fn(rq, dir, dentry, mode, &opaque, sops.sched_uniq);
++		if (error) {
++			BUG_ON(!module);
++			module_put(module);
+ 		return error;
++		}
++	}
+ 
+-	if (!dir->i_op->create)
+-		return -EACCES;	/* shouldn't it be ENOSYS? */
++	error = may_create(dir, dentry);
++
++	if (error)
++		goto out;
++
++	if (!dir->i_op->create) {
++		error = -EACCES;	/* shouldn't it be ENOSYS? */
++		goto out;
++	}
+ 	mode &= S_IALLUGO;
+ 	mode |= S_IFREG;
+ 	error = security_inode_create(dir, dentry, mode);
+ 	if (error)
+-		return error;
++		goto out;
+ 	error = dir->i_op->create(dir, dentry, mode, nd);
+ 	if (!error)
+ 		fsnotify_create(dir, dentry);
++ out:
++	if(sops.create_return_fn)
++		sops.create_return_fn(rq, opaque, error, sops.sched_uniq);
++	if(module)
++		module_put(module);
++
+ 	return error;
+ }
+ 
+@@ -2697,6 +2725,12 @@
+ 
+ int vfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+ {
++	struct request_queue* rq;
++	struct elevator_syscall_ops sops;
++	struct module* module;
++	void* opaque = NULL;
++
++	//it's ok to check permission upfront before queuing since no I/O is performed
+ 	int error = may_create(dir, dentry);
+ 	unsigned max_links = dir->i_sb->s_max_links;
+ 
+@@ -2706,10 +2740,21 @@
+ 	if (!dir->i_op->mkdir)
+ 		return -EPERM;
+ 
++	// intercept entry
++	get_elevator_call_info_from_inode(dir, &rq, &module, &sops);
++	if(sops.mkdir_entry_fn){
++		error = sops.mkdir_entry_fn(rq, dir, dentry, mode, &opaque, sops.sched_uniq);
++		if (error) {
++			BUG_ON(!module);
++			module_put(module);
++			return error;
++		}
++	}
++
+ 	mode &= (S_IRWXUGO|S_ISVTX);
+ 	error = security_inode_mkdir(dir, dentry, mode);
+ 	if (error)
+-		return error;
++		goto out;
+ 
+ 	if (max_links && dir->i_nlink >= max_links)
+ 		return -EMLINK;
+@@ -2717,6 +2762,12 @@
+ 	error = dir->i_op->mkdir(dir, dentry, mode);
+ 	if (!error)
+ 		fsnotify_mkdir(dir, dentry);
++
++out:
++	if(sops.mkdir_return_fn)
++		sops.mkdir_return_fn(rq, opaque, error, sops.sched_uniq);
++	if(module)
++		module_put(module);
+ 	return error;
+ }
+ 

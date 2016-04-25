@@ -1,0 +1,21 @@
+Index: linux-3.5/fs/xfs/xfs_aops.c
+===================================================================
+--- linux-3.5.orig/fs/xfs/xfs_aops.c	2016-04-25 17:38:08.477807624 +0200
++++ linux-3.5/fs/xfs/xfs_aops.c	2016-04-25 17:38:08.471140958 +0200
+@@ -36,6 +36,8 @@
+ #include <linux/pagevec.h>
+ #include <linux/writeback.h>
+ 
++#include <linux/cause_tags.h>
++
+ void
+ xfs_count_page_state(
+ 	struct page		*page,
+@@ -447,6 +449,7 @@
+ 
+ static inline int bio_add_buffer(struct bio *bio, struct buffer_head *bh)
+ {
++	move_causes_bh_to_bio(bh, bio);
+ 	return bio_add_page(bio, bh->b_page, bh->b_size, bh_offset(bh));
+ }
+ 
