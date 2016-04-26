@@ -114,4 +114,5 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 3.15 - Seemed straightforward. Compiles. Not tested.
 * 3.16 - fs/bio.c moved to block/bio.c, otherwise straightforward. Compiles. Not tested.
 * 3.17 - kernel/hrtimer.c moved to kernel/time/hrtimer.c. Otherwise straightforward. Compiles. Not tested.
-* 3.18 - Seemed straightforward. Small change around a kprint() in fs/jbd2/checkpoint.c. Compiles.
+* 3.18 - Seemed straightforward. Small change around a kprint() in fs/jbd2/checkpoint.c. Compiles. Not tested.
+* 3.19 - Applied in one go, just refreshed patches for good measure. Compiles. Not tested.

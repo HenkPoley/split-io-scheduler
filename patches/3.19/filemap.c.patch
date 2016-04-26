@@ -1,0 +1,15 @@
+Index: linux-3.19/mm/filemap.c
+===================================================================
+--- linux-3.19.orig/mm/filemap.c	2016-04-26 14:44:35.313235557 +0200
++++ linux-3.19/mm/filemap.c	2016-04-26 14:44:35.306568891 +0200
+@@ -1110,6 +1110,10 @@
+ 		if (!page)
+ 			return NULL;
+ 
++#ifndef DISABLE_CAUSES
++		page->locked_causes = NULL;
++#endif
++
+ 		if (WARN_ON_ONCE(!(fgp_flags & FGP_LOCK)))
+ 			fgp_flags |= FGP_LOCK;
+ 

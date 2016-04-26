@@ -1,0 +1,21 @@
+Index: linux-3.17/block/bio.c
+===================================================================
+--- linux-3.17.orig/block/bio.c	2016-04-26 14:04:41.426630283 +0200
++++ linux-3.17/block/bio.c	2016-04-26 14:04:41.419963617 +0200
+@@ -28,6 +28,7 @@
+ #include <linux/mempool.h>
+ #include <linux/workqueue.h>
+ #include <linux/cgroup.h>
++#include <linux/cause_tags.h>
+ #include <scsi/sg.h>		/* for struct sg_iovec */
+ 
+ #include <trace/events/block.h>
+@@ -248,6 +249,8 @@
+ 	struct bio_set *bs = bio->bi_pool;
+ 	void *p;
+ 
++	del_cause_list_list(bio->cll);
++
+ 	__bio_free(bio);
+ 
+ 	if (bs) {
