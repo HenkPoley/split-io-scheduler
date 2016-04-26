@@ -1,0 +1,23 @@
+Index: linux-3.11/fs/inode.c
+===================================================================
+--- linux-3.11.orig/fs/inode.c	2016-04-26 10:17:12.113705452 +0200
++++ linux-3.11/fs/inode.c	2016-04-26 10:17:12.107038786 +0200
+@@ -219,6 +219,8 @@
+ 		return NULL;
+ 	}
+ 
++	inode->i_private1 = 0;
++
+ 	return inode;
+ }
+ 
+@@ -1513,7 +1515,9 @@
+ 		inode->i_ctime = *time;
+ 	if (flags & S_MTIME)
+ 		inode->i_mtime = *time;
++#ifndef SPLIT_NODEP
+ 	mark_inode_dirty_sync(inode);
++#endif
+ 	return 0;
+ }
+ 

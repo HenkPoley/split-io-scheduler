@@ -1,0 +1,14 @@
+Index: linux-3.10/include/linux/buffer_head.h
+===================================================================
+--- linux-3.10.orig/include/linux/buffer_head.h	2016-04-26 05:52:39.470803919 +0200
++++ linux-3.10/include/linux/buffer_head.h	2016-04-26 05:52:39.467470585 +0200
+@@ -74,6 +74,9 @@
+ 	struct address_space *b_assoc_map;	/* mapping this buffer is
+ 						   associated with */
+ 	atomic_t b_count;		/* users using this buffer_head */
++
++	spinlock_t causes_lock;
++	struct cause_list* causes;
+ };
+ 
+ /*

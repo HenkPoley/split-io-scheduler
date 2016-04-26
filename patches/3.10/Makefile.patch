@@ -1,0 +1,13 @@
+Index: linux-3.3/block/Makefile
+===================================================================
+--- linux-3.3.orig/block/Makefile	2016-04-25 11:43:02.606482017 +0200
++++ linux-3.3/block/Makefile	2016-04-25 11:43:28.566481215 +0200
+@@ -6,7 +6,7 @@
+ 			blk-flush.o blk-settings.o blk-ioc.o blk-map.o \
+ 			blk-exec.o blk-merge.o blk-softirq.o blk-timeout.o \
+ 			blk-iopoll.o blk-lib.o ioctl.o genhd.o scsi_ioctl.o \
+-			partition-generic.o partitions/
++			cause_tags.o partition-generic.o partitions/
+ 
+ obj-$(CONFIG_BLK_DEV_BSG)	+= bsg.o
+ obj-$(CONFIG_BLK_DEV_BSGLIB)	+= bsg-lib.o

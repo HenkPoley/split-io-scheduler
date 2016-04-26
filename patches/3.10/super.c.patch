@@ -1,0 +1,29 @@
+Index: linux-3.10/fs/btrfs/super.c
+===================================================================
+--- linux-3.10.orig/fs/btrfs/super.c	2016-04-26 05:46:36.393543460 +0200
++++ linux-3.10/fs/btrfs/super.c	2016-04-26 05:47:20.775722090 +0200
+@@ -64,6 +64,24 @@
+ static const struct super_operations btrfs_super_ops;
+ static struct file_system_type btrfs_fs_type;
+ 
++struct block_device *btrfs_inode_to_bdev(struct inode* inode){
++	struct btrfs_inode *btrfs_inode = BTRFS_I(inode);
++	struct btrfs_device *btrfs_device;
++
++
++	if(!btrfs_inode->root)
++		return NULL;
++	if(!btrfs_inode->root->fs_info)
++		return NULL;
++	if(!btrfs_inode->root->fs_info->fs_devices)
++		return NULL;
++	if(btrfs_inode->root->fs_info->fs_devices->num_devices != 1)
++		return NULL;
++
++	btrfs_device = list_first_entry(&btrfs_inode->root->fs_info->fs_devices->devices, struct btrfs_device, dev_list);
++	return btrfs_device->bdev;
++}
++
+ static const char *btrfs_decode_error(int errno)
+ {
+ 	char *errstr = "unknown";

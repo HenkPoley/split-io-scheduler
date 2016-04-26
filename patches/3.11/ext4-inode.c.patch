@@ -1,0 +1,73 @@
+Index: linux-3.11/fs/ext4/inode.c
+===================================================================
+--- linux-3.11.orig/fs/ext4/inode.c	2016-04-26 10:18:13.667037207 +0200
++++ linux-3.11/fs/ext4/inode.c	2016-04-26 10:28:34.873687942 +0200
+@@ -38,6 +38,7 @@
+ #include <linux/slab.h>
+ #include <linux/ratelimit.h>
+ #include <linux/aio.h>
++#include <linux/cause_tags.h>
+ 
+ #include "ext4_jbd2.h"
+ #include "xattr.h"
+@@ -1949,6 +1950,10 @@
+ 		if (!buffer_dirty(bh) || !buffer_mapped(bh) ||
+ 		    (!buffer_delay(bh) && !buffer_unwritten(bh)) ||
+ 		    lblk >= blocks) {
++			// are we a proxy?
++			if (current->causes)
++				cause_list_copy(bh->causes, &current->causes);
++
+ 			/* Found extent to map? */
+ 			if (mpd->map.m_len)
+ 				return false;
+@@ -2146,7 +2151,7 @@
+  * mapped so that it can be written out (and thus forward progress is
+  * guaranteed). After mapping we submit all mapped pages for IO.
+  */
+-static int mpage_map_and_submit_extent(handle_t *handle,
++static int __mpage_map_and_submit_extent(handle_t *handle,
+ 				       struct mpage_da_data *mpd,
+ 				       bool *give_up_on_write)
+ {
+@@ -2216,6 +2221,18 @@
+ 	return err;
+ }
+ 
++static int mpage_map_and_submit_extent(handle_t *handle,
++				       struct mpage_da_data *mpd,
++				       bool *give_up_on_write)
++{
++	int ret = __mpage_map_and_submit_extent(handle, mpd, give_up_on_write);
++	// we are no longer acting as a proxy for dirty buffers
++	put_cause_list(current->causes);
++	current->causes = new_cause_list();
++	
++	return ret;
++}
++
+ /*
+  * Calculate the total number of credits to reserve for one writepages
+  * iteration. This is called from ext4_writepages(). We map an extent of
+@@ -2434,6 +2451,10 @@
+ 		ext4_journal_stop(handle);
+ 	}
+ 
++	// now acting as cause proxy
++	BUG_ON(current->causes);
++	current->causes = new_cause_list();
++
+ 	if (wbc->range_start == 0 && wbc->range_end == LLONG_MAX)
+ 		range_whole = 1;
+ 
+@@ -2542,6 +2563,10 @@
+ 		mapping->writeback_index = mpd.first_page;
+ 
+ out_writepages:
++	// done acting as cause proxy
++	put_cause_list(current->causes);
++	current->causes = NULL;
++
+ 	trace_ext4_writepages_result(inode, wbc, ret,
+ 				     nr_to_write - wbc->nr_to_write);
+ 	return ret;

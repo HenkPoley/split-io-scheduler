@@ -31,6 +31,7 @@ Copy config_yangsuli, salvaged from release tarball, to .config (note the dot). 
 
 ```
 make -j`nproc`
+##make bzImage -j`nproc`
 ##make modules -j`nproc`
 #sudo make modules_install
 #sudo make install
@@ -52,6 +53,7 @@ After initial compilation, if you updated some code in the kernel:
 
 ```
 make -j`nproc`
+##make bzImage -j`nproc`
 ##make modules -j`nproc`
 #sudo make modules_install
 #sudo make install
@@ -67,7 +69,7 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 
 ## Notes about the code
 
-* include/linux/hashtable.h is backported from Linux 3.7 (or later)
+* include/linux/hashtable.h is backported from Linux 3.7 (code unchanged)
 * The variable expire_rb_node is used in the modules, not in the kernel, gives build warning
 * xfs_vnodeops.c.patch just contains a comment about dirtying data
 * variable i_private1 probably needs a better comment
@@ -95,11 +97,15 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 I 'might not' have put changes I've done in later patches back into the older patches.
 
 * 3.2.51 - original, from tarball, excluded some cruft. Boots.
-* 3.2 - also has trailing whitespace fixes. Compiles. Not tested.
+* 3.2 - Backport. Also has trailing whitespace fixes. Compiles. Not tested.
 * 3.3 - elevator->elevator_type to elevator->type, and a fixup around q->sched_uniq in elevator initialization/switching, some whitespace fixes. Compiles, 'section mismatch' warnings in some modules are not caused by this patch. Not tested.
 * 3.4 - Ext4 (jbd2) now also has it's own function to free a transaction, moved the causes list admin call there. Should check if other filesystems also did this change, and I properly added the causes tracking there too. Compiles. 'section mismatch' warning is still not caused by our code. Not tested.
 * 3.5 - lost the insertion point of a *comment* in fs/xfs/xfs_inode.c. Seems that there is nothing that 'dirties' anything after that point anymore. Not tested.
 * 3.6 - Seemed straightforward. Compiles. Not tested.
 * 3.7 - Seemed straightforward. Compiles. Not tested.
-* 3.8 - Seemed straightforward. Not tested.
-* 3.9 - Dropped a commented printk() in block/cfq-iosched.c
+* 3.8 - Seemed straightforward. Compiles. Not tested.
+* 3.9 - Dropped a commented printk() in block/cfq-iosched.c. Compiles. Not tested.
+* 3.10 - Seemed straightforward. Compiles. Not tested.
+* 3.11 - Had to do some careful parsing of fs/jbd2/commit.c, but that patch was straightforward in the end. Changes to fs/ext4/inode.c are more complicated. Might well have made mistakes here. In some places they renamed 'bh' to 'descriptor', those mistakes would probably be picked up by the compiler. Had to fix thinkos in my code in both fs/jbd2/commit.c & fs/ext4/inode.c already. Compiles. Not tested.
+* 3.12 - fs/xfs/xfs_vnodeops.c is gone, since it's merely a comment I deleted the patch from the patchset. Otherwise straightforward. Compiles. Not tested.
+* 3.13 - Seemed straightforward. Compiles. Not tested.

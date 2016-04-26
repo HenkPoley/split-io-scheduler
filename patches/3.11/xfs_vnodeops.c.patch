@@ -1,0 +1,13 @@
+Index: linux-3.11/fs/xfs/xfs_vnodeops.c
+===================================================================
+--- linux-3.11.orig/fs/xfs/xfs_vnodeops.c	2016-04-26 10:17:52.413704419 +0200
++++ linux-3.11/fs/xfs/xfs_vnodeops.c	2016-04-26 10:17:52.407037752 +0200
+@@ -590,6 +590,8 @@
+ 	 * the transaction cancel unlocking dp so don't do it explicitly in the
+ 	 * error path.
+ 	 */
++	//yangsuli
++	//here is where metadata actually got dirtied....
+ 	xfs_trans_ijoin(tp, dp, XFS_ILOCK_EXCL);
+ 	unlock_dp_on_error = false;
+ 

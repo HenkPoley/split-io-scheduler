@@ -1,0 +1,29 @@
+Index: linux-3.12/fs/jbd2/journal.c
+===================================================================
+--- linux-3.12.orig/fs/jbd2/journal.c	2016-04-26 10:55:47.373646076 +0200
++++ linux-3.12/fs/jbd2/journal.c	2016-04-26 10:55:47.366979410 +0200
+@@ -49,6 +49,7 @@
+ 
+ #include <asm/uaccess.h>
+ #include <asm/page.h>
++#include <linux/cause_tags.h>
+ 
+ #ifdef CONFIG_JBD2_DEBUG
+ ushort jbd2_journal_enable_debug __read_mostly;
+@@ -2358,6 +2359,8 @@
+ 
+ static void journal_free_journal_head(struct journal_head *jh)
+ {
++	put_cause_list(jh->causes);
++
+ #ifdef CONFIG_JBD2_DEBUG
+ 	atomic_dec(&nr_journal_heads);
+ 	memset(jh, JBD2_POISON_FREE, sizeof(*jh));
+@@ -2428,6 +2431,7 @@
+ 			goto repeat;
+ 		}
+ 
++		new_jh->causes = NULL;
+ 		jh = new_jh;
+ 		new_jh = NULL;		/* We consumed it */
+ 		set_buffer_jbd(bh);

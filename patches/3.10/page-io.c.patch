@@ -1,0 +1,23 @@
+Index: linux-3.10/fs/ext4/page-io.c
+===================================================================
+--- linux-3.10.orig/fs/ext4/page-io.c	2016-04-26 05:41:27.082308007 +0200
++++ linux-3.10/fs/ext4/page-io.c	2016-04-26 05:45:47.742564962 +0200
+@@ -25,6 +25,7 @@
+ #include <linux/kernel.h>
+ #include <linux/slab.h>
+ #include <linux/mm.h>
++#include <linux/cause_tags.h>
+ 
+ #include "ext4_jbd2.h"
+ #include "xattr.h"
+@@ -361,6 +362,10 @@
+ 	ret = bio_add_page(io->io_bio, bh->b_page, bh->b_size, bh_offset(bh));
+ 	if (ret != bh->b_size)
+ 		goto submit_and_retry;
++
++	// I think this path is only for writes
++	move_causes_bh_to_bio(bh, io->io_bio);
++
+ 	return 0;
+ }
+ 
