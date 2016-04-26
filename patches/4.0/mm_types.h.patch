@@ -1,0 +1,18 @@
+Index: linux-4.0/include/linux/mm_types.h
+===================================================================
+--- linux-4.0.orig/include/linux/mm_types.h	2016-04-26 15:07:39.139866734 +0200
++++ linux-4.0/include/linux/mm_types.h	2016-04-26 15:07:39.133200068 +0200
+@@ -205,7 +205,13 @@
+ #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
+ 	int _last_cpupid;
+ #endif
++
++    // cause list for btrfs
++#ifndef DISABLE_CAUSES
++        void* locked_causes;
++#endif
+ }
++
+ /*
+  * The struct page can be forced to be double word aligned so that atomic ops
+  * on double words work. The SLUB allocator can make use of such a feature.

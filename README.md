@@ -116,3 +116,4 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 3.17 - kernel/hrtimer.c moved to kernel/time/hrtimer.c. Otherwise straightforward. Compiles. Not tested.
 * 3.18 - Seemed straightforward. Small change around a kprint() in fs/jbd2/checkpoint.c. Compiles. Not tested.
 * 3.19 - Applied in one go, just refreshed patches for good measure. Compiles. Not tested.
+* 4.0 - Seems like somebody did some copy-pasting in fs/xfs/xfs_inode.c, pasted yangsuli *comment* in both places. Otherwise straightforward. Compiles. Not tested.
