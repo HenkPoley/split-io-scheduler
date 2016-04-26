@@ -1,0 +1,12 @@
+Index: linux-3.14/block/blk-core.c
+===================================================================
+--- linux-3.14.orig/block/blk-core.c	2016-04-26 12:12:30.966861347 +0200
++++ linux-3.14/block/blk-core.c	2016-04-26 12:12:30.960194680 +0200
+@@ -108,6 +108,7 @@
+ 	rq->__sector = (sector_t) -1;
+ 	INIT_HLIST_NODE(&rq->hash);
+ 	RB_CLEAR_NODE(&rq->rb_node);
++	RB_CLEAR_NODE(&rq->expire_rb_node);
+ 	rq->cmd = rq->__cmd;
+ 	rq->cmd_len = BLK_MAX_CDB;
+ 	rq->tag = -1;

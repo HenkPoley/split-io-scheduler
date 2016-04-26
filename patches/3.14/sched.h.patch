@@ -1,0 +1,18 @@
+Index: linux-3.14/include/linux/sched.h
+===================================================================
+--- linux-3.14.orig/include/linux/sched.h	2016-04-26 12:13:33.983526397 +0200
++++ linux-3.14/include/linux/sched.h	2016-04-26 12:13:33.976859731 +0200
+@@ -1581,6 +1581,13 @@
+ 	unsigned int	sequential_io;
+ 	unsigned int	sequential_io_avg;
+ #endif
++
++	// sometimes a task acts as a proxy for other threads (e.g.,
++	// a flush thread acting on behalf of other tasks that did
++	// delayed allocation).
++	struct cause_list* causes;
++
++	atomic_t account_id;
+ };
+ 
+ /* Future-safe accessor for struct task_struct's cpus_allowed. */

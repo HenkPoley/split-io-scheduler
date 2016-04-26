@@ -1,0 +1,91 @@
+Index: linux-3.14/fs/jbd2/transaction.c
+===================================================================
+--- linux-3.14.orig/fs/jbd2/transaction.c	2016-04-26 12:13:40.390192899 +0200
++++ linux-3.14/fs/jbd2/transaction.c	2016-04-26 12:13:40.386859567 +0200
+@@ -29,6 +29,8 @@
+ #include <linux/backing-dev.h>
+ #include <linux/bug.h>
+ #include <linux/module.h>
++#include <linux/kthread.h>
++#include <linux/cause_tags.h>
+ 
+ #include <trace/events/jbd2.h>
+ 
+@@ -61,6 +63,7 @@
+ {
+ 	if (unlikely(ZERO_OR_NULL_PTR(transaction)))
+ 		return;
++	put_cause_list(transaction->causes);
+ 	kmem_cache_free(transaction_cache, transaction);
+ }
+ 
+@@ -105,6 +108,8 @@
+ 	transaction->t_start = jiffies;
+ 	transaction->t_requested = 0;
+ 
++	transaction->causes = new_cause_list();
++
+ 	return transaction;
+ }
+ 
+@@ -1299,6 +1304,21 @@
+ 		handle->h_buffer_credits--;
+ 	}
+ 
++	cause_list_add(&transaction->causes, current);
++	cause_list_add(&jh->causes, current);
++
++	/*
++	if(current->causes){
++		struct io_cause *cause;
++		list_for_each_entry(cause, &current->causes->items, list){
++			printk("bh: %p add cause %d\n", bh, cause->account_id);
++		}
++
++	}else{
++		printk("bh: %p add cause %d\n", current->account_id);
++	}
++	*/
++
+ 	/*
+ 	 * fastpath, to avoid expensive locking.  If this buffer is already
+ 	 * on the running transaction's metadata list there is nothing to do.
+@@ -1592,6 +1612,8 @@
+ 	 * writes.  No point in waiting for joiners in that case.
+ 	 */
+ 	pid = current->pid;
++
++#ifndef SPLIT_NODEP
+ 	if (handle->h_sync && journal->j_last_sync_writer != pid) {
+ 		u64 commit_time, trans_time;
+ 
+@@ -1616,6 +1638,7 @@
+ 			schedule_hrtimeout(&expires, HRTIMER_MODE_ABS);
+ 		}
+ 	}
++#endif
+ 
+ 	if (handle->h_sync)
+ 		transaction->t_synchronous_commit = 1;
+@@ -2266,6 +2289,21 @@
+ 		J_ASSERT_JH(jh, !jh->b_frozen_data);
+ 		return;
+ 	case BJ_Metadata:
++#ifndef DISABLE_CAUSES
++		// don't blame ourselves for things like commit records, even
++		// though we write them!  This should be blamed on the processes
++		// that added records to start with.  Do this by checking if the
++		// thread is associated with the jbd2 journal.
++		/*
++		if (current->flags&PF_KTHREAD &&
++			kthread_data(current) == transaction->t_journal) {
++			// skip
++		} else {
++			cause_list_add(&transaction->causes, current);
++		}
++		*/
++#endif
++
+ 		transaction->t_nr_buffers++;
+ 		list = &transaction->t_buffers;
+ 		break;
