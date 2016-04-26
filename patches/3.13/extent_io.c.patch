@@ -1,7 +1,7 @@
 Index: linux-3.13/fs/btrfs/extent_io.c
 ===================================================================
 --- linux-3.13.orig/fs/btrfs/extent_io.c	2016-04-26 11:47:40.500232904 +0200
-+++ linux-3.13/fs/btrfs/extent_io.c	2016-04-26 11:58:30.543549567 +0200
++++ linux-3.13/fs/btrfs/extent_io.c	2016-04-26 12:02:05.443544055 +0200
 @@ -21,6 +21,8 @@
  #include "rcu-string.h"
  #include "backref.h"
@@ -47,7 +47,7 @@ Index: linux-3.13/fs/btrfs/extent_io.c
 +	}
 +
 +	len = page->private >> 2;
-+	eb = find_extent_buffer(io_tree, bytenr); //, len); // HJP - they dropped the length in 3.13 ..
++	eb = find_extent_buffer(io_tree, bytenr);
 +	if (!eb) {
 +		printk("..No buffer.\n");
 +	} else {
