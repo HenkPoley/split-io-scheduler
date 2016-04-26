@@ -1,0 +1,18 @@
+Index: linux-4.1/include/linux/sched.h
+===================================================================
+--- linux-4.1.orig/include/linux/sched.h	2016-04-26 15:18:58.433182647 +0200
++++ linux-4.1/include/linux/sched.h	2016-04-26 15:18:58.426515981 +0200
+@@ -1724,6 +1724,13 @@
+ #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
+ 	unsigned long	task_state_change;
+ #endif
++
++	// sometimes a task acts as a proxy for other threads (e.g.,
++	// a flush thread acting on behalf of other tasks that did
++	// delayed allocation).
++	struct cause_list* causes;
++
++	atomic_t account_id;
+ };
+ 
+ /* Future-safe accessor for struct task_struct's cpus_allowed. */

@@ -1,0 +1,23 @@
+Index: linux-4.0/fs/inode.c
+===================================================================
+--- linux-4.0.orig/fs/inode.c	2016-04-26 14:58:15.063214534 +0200
++++ linux-4.0/fs/inode.c	2016-04-26 14:59:19.573212880 +0200
+@@ -211,6 +211,8 @@
+ 		return NULL;
+ 	}
+ 
++	inode->i_private1 = 0;
++
+ 	return inode;
+ }
+ 
+@@ -1557,7 +1559,9 @@
+ 
+ 	if (!(inode->i_sb->s_flags & MS_LAZYTIME) || (flags & S_VERSION))
+ 		iflags |= I_DIRTY_SYNC;
++#ifndef SPLIT_NODEP
+ 	__mark_inode_dirty(inode, iflags);
++#endif
+ 	return 0;
+ }
+ EXPORT_SYMBOL(generic_update_time);

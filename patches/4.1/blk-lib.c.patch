@@ -1,0 +1,22 @@
+Index: linux-3.14/block/blk-lib.c
+===================================================================
+--- linux-3.14.orig/block/blk-lib.c	2016-04-26 12:12:35.610194561 +0200
++++ linux-3.14/block/blk-lib.c	2016-04-26 12:12:35.603527895 +0200
+@@ -6,6 +6,7 @@
+ #include <linux/bio.h>
+ #include <linux/blkdev.h>
+ #include <linux/scatterlist.h>
++#include <linux/cause_tags.h>
+ 
+ #include "blk.h"
+ 
+@@ -256,6 +257,9 @@
+ 		while (nr_sects != 0) {
+ 			sz = min((sector_t) PAGE_SIZE >> 9 , nr_sects);
+ 			ret = bio_add_page(bio, ZERO_PAGE(0), sz << 9, 0);
++
++			add_causes_zero_to_bio(bio, sz << 9);
++
+ 			nr_sects -= ret >> 9;
+ 			sector += ret >> 9;
+ 			if (ret < (sz << 9))
