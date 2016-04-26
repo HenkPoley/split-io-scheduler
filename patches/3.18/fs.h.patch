@@ -1,0 +1,14 @@
+Index: linux-3.18/include/linux/fs.h
+===================================================================
+--- linux-3.18.orig/include/linux/fs.h	2016-04-26 14:26:18.573263684 +0200
++++ linux-3.18/include/linux/fs.h	2016-04-26 14:26:18.566597017 +0200
+@@ -624,6 +624,9 @@
+ #endif
+ 
+ 	void			*i_private; /* fs or device private pointer */
++
++	// for scheduler to use as it pleases
++	long i_private1; // (maybe use as last write offset)
+ };
+ 
+ static inline int inode_unhashed(struct inode *inode)

@@ -1,0 +1,44 @@
+Index: linux-3.18/include/linux/blkdev.h
+===================================================================
+--- linux-3.18.orig/include/linux/blkdev.h	2016-04-26 14:25:34.693264809 +0200
++++ linux-3.18/include/linux/blkdev.h	2016-04-26 14:25:34.686598143 +0200
+@@ -141,6 +141,7 @@
+ 		struct rb_node rb_node;	/* sort/lookup */
+ 		void *completion_data;
+ 	};
++	struct rb_node expire_rb_node;
+ 
+ 	/*
+ 	 * Three pointers are available for the IO schedulers, if they need
+@@ -484,6 +485,9 @@
+ 
+ 	struct blk_mq_tag_set	*tag_set;
+ 	struct list_head	tag_set_list;
++
++	// this allows us to identify when schedulers have switched
++	int sched_uniq;
+ };
+ 
+ #define QUEUE_FLAG_QUEUED	1	/* uses generic tag queueing */
+@@ -1669,4 +1673,21 @@
+ 
+ #endif /* CONFIG_BLOCK */
+ 
++#include <linux/elevator.h>
++struct request_queue;
++
++struct request_queue *inode_to_request_queue(struct inode *inode);
++
++void get_elevator_call_info_from_inode(struct inode* inode,
++										  struct request_queue **rq,
++										  struct module **module,
++										  struct elevator_syscall_ops *sops);
++
++
++void get_elevator_call_info(struct file* filp,
++										  struct request_queue **rq,
++										  struct module **module,
++										  struct elevator_syscall_ops *sops);
++
++
+ #endif
