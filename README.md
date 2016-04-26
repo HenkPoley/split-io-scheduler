@@ -95,6 +95,7 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 ## Order of back/forward porting
 
 I 'might not' have put changes I've done in later patches back into the older patches.
+Be sure to note that the "Does it compile?" test does not mean it actually works.
 
 * 3.2.51 - original, from tarball, excluded some cruft. Boots.
 * 3.2 - Backport. Also has trailing whitespace fixes. Compiles. Not tested.
@@ -106,7 +107,10 @@ I 'might not' have put changes I've done in later patches back into the older pa
 * 3.8 - Seemed straightforward. Compiles. Not tested.
 * 3.9 - Dropped a commented printk() in block/cfq-iosched.c. Compiles. Not tested.
 * 3.10 - Seemed straightforward. Compiles. Not tested.
-* 3.11 - Had to do some careful parsing of fs/jbd2/commit.c, but that patch was straightforward in the end. Changes to fs/ext4/inode.c are more complicated. Might well have made mistakes here. In some places they renamed 'bh' to 'descriptor', those mistakes would probably be picked up by the compiler. Had to fix thinkos in my code in both fs/jbd2/commit.c & fs/ext4/inode.c already. Compiles. Not tested.
+* 3.11 - Had to do some careful parsing of fs/jbd2/commit.c, but that patch was straightforward in the end. Changes to fs/ext4/inode.c are more complicated. Might well have made mistakes here. In some places they renamed 'bh' to 'descriptor', those mistakes would probably be picked up by the compiler. Had to fix thinkos in my code in both fs/jbd2/commit.c & fs/ext4/inode.c already. Split journal in jbd2_journal_commit_transaction() was removed in this kernel, so I commented the causes tracking for SPLIT_JOURNAL_META. Compiles. Not tested.
 * 3.12 - fs/xfs/xfs_vnodeops.c is gone, since it's merely a comment I deleted the patch from the patchset. Otherwise straightforward. Compiles. Not tested.
 * 3.13 - Seemed straightforward. Compiles. Not tested.
 * 3.14 - Removed print_page_info() from fs/btrfs/extent_io.c, which broke compilation. That function was only referenced from the previously removed "SAMER" comment. Commented out request_sanity_check() too. Seemed otherwise straightforward.  Compiles. Not tested.
+* 3.15 - Seemed straightforward. Compiles.
+* 3.16 - fs/bio.c moved to block/bio.c, otherwise straightforward.
+* 3.17 - kernel/hrtimer.c moved to kernel/time/hrtimer.c

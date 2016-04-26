@@ -1,0 +1,29 @@
+Index: linux-3.15/fs/btrfs/super.c
+===================================================================
+--- linux-3.15.orig/fs/btrfs/super.c	2016-04-26 13:24:35.303358656 +0200
++++ linux-3.15/fs/btrfs/super.c	2016-04-26 13:24:35.296691990 +0200
+@@ -68,6 +68,24 @@
+ 
+ static int btrfs_remount(struct super_block *sb, int *flags, char *data);
+ 
++struct block_device *btrfs_inode_to_bdev(struct inode* inode){
++	struct btrfs_inode *btrfs_inode = BTRFS_I(inode);
++	struct btrfs_device *btrfs_device;
++
++
++	if(!btrfs_inode->root)
++		return NULL;
++	if(!btrfs_inode->root->fs_info)
++		return NULL;
++	if(!btrfs_inode->root->fs_info->fs_devices)
++		return NULL;
++	if(btrfs_inode->root->fs_info->fs_devices->num_devices != 1)
++		return NULL;
++
++	btrfs_device = list_first_entry(&btrfs_inode->root->fs_info->fs_devices->devices, struct btrfs_device, dev_list);
++	return btrfs_device->bdev;
++}
++
+ static const char *btrfs_decode_error(int errno)
+ {
+ 	char *errstr = "unknown";

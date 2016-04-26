@@ -1,0 +1,68 @@
+Index: linux-3.17/fs/jbd2/revoke.c
+===================================================================
+--- linux-3.17.orig/fs/jbd2/revoke.c	2016-04-26 14:02:45.143299932 +0200
++++ linux-3.17/fs/jbd2/revoke.c	2016-04-26 14:03:44.259965083 +0200
+@@ -93,6 +93,7 @@
+ #include <linux/bio.h>
+ #include <linux/log2.h>
+ #endif
++#include <linux/cause_tags.h>
+ 
+ static struct kmem_cache *jbd2_revoke_record_cache;
+ static struct kmem_cache *jbd2_revoke_table_cache;
+@@ -125,7 +126,8 @@
+ 				    struct list_head *,
+ 				    struct buffer_head **, int *,
+ 				    struct jbd2_revoke_record_s *, int);
+-static void flush_descriptor(journal_t *, struct buffer_head *, int, int);
++static void flush_descriptor(journal_t *, struct buffer_head *, int, int,
++				    struct cause_list* cause_list);
+ #endif
+ 
+ /* Utility functions to maintain the revoke table */
+@@ -533,7 +535,8 @@
+ void jbd2_journal_write_revoke_records(journal_t *journal,
+ 				       transaction_t *transaction,
+ 				       struct list_head *log_bufs,
+-				       int write_op)
++				       int write_op,
++				       struct cause_list* cause_list)
+ {
+ 	struct buffer_head *descriptor;
+ 	struct jbd2_revoke_record_s *record;
+@@ -564,7 +567,7 @@
+ 		}
+ 	}
+ 	if (descriptor)
+-		flush_descriptor(journal, descriptor, offset, write_op);
++		flush_descriptor(journal, descriptor, offset, write_op, cause_list);
+ 	jbd_debug(1, "Wrote %d revoke records\n", count);
+ }
+ 
+@@ -603,7 +606,7 @@
+ 	/* Make sure we have a descriptor with space left for the record */
+ 	if (descriptor) {
+ 		if (offset >= journal->j_blocksize - csum_size) {
+-			flush_descriptor(journal, descriptor, offset, write_op);
++			flush_descriptor(journal, descriptor, offset, write_op, NULL);
+ 			descriptor = NULL;
+ 		}
+ 	}
+@@ -663,7 +666,8 @@
+ 
+ static void flush_descriptor(journal_t *journal,
+ 			     struct buffer_head *descriptor,
+-			     int offset, int write_op)
++			     int offset, int write_op,
++			     struct cause_list* cause_list)
+ {
+ 	jbd2_journal_revoke_header_t *header;
+ 
+@@ -679,6 +683,7 @@
+ 	set_buffer_jwrite(descriptor);
+ 	BUFFER_TRACE(descriptor, "write");
+ 	set_buffer_dirty(descriptor);
++	descriptor->causes = get_cause_list(cause_list); // new ref
+ 	write_dirty_buffer(descriptor, write_op);
+ }
+ #endif
