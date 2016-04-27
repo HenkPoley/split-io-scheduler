@@ -1,0 +1,14 @@
+Index: linux-4.5/block/Makefile
+===================================================================
+--- linux-4.5.orig/block/Makefile	2016-04-27 09:51:57.764982768 +0200
++++ linux-4.5/block/Makefile	2016-04-27 09:52:25.121648733 +0200
+@@ -8,7 +8,8 @@
+ 			blk-lib.o blk-mq.o blk-mq-tag.o \
+ 			blk-mq-sysfs.o blk-mq-cpu.o blk-mq-cpumap.o ioctl.o \
+ 			genhd.o scsi_ioctl.o partition-generic.o ioprio.o \
+-			badblocks.o partitions/
++			badblocks.o partitions/ \
++			cause_tags.o
+ 
+ obj-$(CONFIG_BOUNCE)	+= bounce.o
+ obj-$(CONFIG_BLK_DEV_BSG)	+= bsg.o

@@ -1,0 +1,13 @@
+Index: linux-4.3/include/linux/blk_types.h
+===================================================================
+--- linux-4.3.orig/include/linux/blk_types.h	2016-04-27 09:15:16.485039222 +0200
++++ linux-4.3/include/linux/blk_types.h	2016-04-27 09:15:16.478372555 +0200
+@@ -99,6 +99,8 @@
+ 
+ 	struct bio_set		*bi_pool;
+ 
++	struct cause_list_list *cll;
++
+ 	/*
+ 	 * We can inline a number of vecs at the end of the bio, to avoid
+ 	 * double allocations for a small number of bio_vecs. This member

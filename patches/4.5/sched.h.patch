@@ -1,0 +1,19 @@
+Index: linux-4.5/include/linux/sched.h
+===================================================================
+--- linux-4.5.orig/include/linux/sched.h	2016-04-27 09:54:39.241645294 +0200
++++ linux-4.5/include/linux/sched.h	2016-04-27 09:54:39.234978627 +0200
+@@ -1830,6 +1830,14 @@
+ 	unsigned long	task_state_change;
+ #endif
+ 	int pagefault_disabled;
++
++	// sometimes a task acts as a proxy for other threads (e.g.,
++	// a flush thread acting on behalf of other tasks that did
++	// delayed allocation).
++	struct cause_list* causes;
++
++	atomic_t account_id;
++
+ /* CPU-specific state of this task */
+ 	struct thread_struct thread;
+ /*
