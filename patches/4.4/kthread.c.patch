@@ -1,0 +1,12 @@
+Index: linux-4.2/kernel/kthread.c
+===================================================================
+--- linux-4.2.orig/kernel/kthread.c	2016-04-26 17:00:48.593264725 +0200
++++ linux-4.2/kernel/kthread.c	2016-04-26 17:00:48.586598059 +0200
+@@ -68,6 +68,7 @@
+ 		return __to_kthread(vfork);
+ 	return NULL;
+ }
++EXPORT_SYMBOL(kthread_data);
+ 
+ /**
+  * kthread_should_stop - should this kthread return now?

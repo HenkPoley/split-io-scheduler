@@ -1,0 +1,36 @@
+Index: linux-4.3/fs/xfs/xfs_inode.c
+===================================================================
+--- linux-4.3.orig/fs/xfs/xfs_inode.c	2016-04-27 09:16:47.851703545 +0200
++++ linux-4.3/fs/xfs/xfs_inode.c	2016-04-27 09:16:47.848370213 +0200
+@@ -1741,6 +1741,7 @@
+ 	 * comment in xfs_setattr_size() for details.
+ 	 */
+ 	ip->i_d.di_size = 0;
++	//yangsuli: here dirties data...
+ 	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
+ 
+ 	error = xfs_itruncate_extents(&tp, ip, XFS_DATA_FORK, 0);
+@@ -2022,6 +2023,11 @@
+ 	offset = offsetof(xfs_agi_t, agi_unlinked) +
+ 		(sizeof(xfs_agino_t) * bucket_index);
+ 	xfs_trans_buf_set_type(tp, agibp, XFS_BLFT_AGI_BUF);
++	//yangsuli
++	//here we dirty
++	//but note that here the dirtier created/modified bp?
++	//is it true that who ever calls trans_log_buf dirtied the buf?
++	//possible...
+ 	xfs_trans_log_buf(tp, agibp, offset,
+ 			  (offset + sizeof(xfs_agino_t) - 1));
+ 	return 0;
+@@ -2114,6 +2120,11 @@
+ 		offset = offsetof(xfs_agi_t, agi_unlinked) +
+ 			(sizeof(xfs_agino_t) * bucket_index);
+ 		xfs_trans_buf_set_type(tp, agibp, XFS_BLFT_AGI_BUF);
++		//yangsuli
++		//here we dirty
++		//but note that here the dirtier created/modified bp?
++		//is it true that who ever calls trans_log_buf dirtied the buf?
++		//possible...
+ 		xfs_trans_log_buf(tp, agibp, offset,
+ 				  (offset + sizeof(xfs_agino_t) - 1));
+ 	} else {

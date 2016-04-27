@@ -1,0 +1,23 @@
+Index: linux-4.4/include/linux/jbd2.h
+===================================================================
+--- linux-4.4.orig/include/linux/jbd2.h	2016-04-27 09:37:20.855005257 +0200
++++ linux-4.4/include/linux/jbd2.h	2016-04-27 09:37:20.848338591 +0200
+@@ -693,6 +693,8 @@
+ 	 * structures associated with the transaction
+ 	 */
+ 	struct list_head	t_private_list;
++
++	struct cause_list* causes;
+ };
+ 
+ struct transaction_run_stats_s {
+@@ -1330,7 +1332,8 @@
+ extern void	   jbd2_journal_write_revoke_records(journal_t *journal,
+ 						     transaction_t *transaction,
+ 						     struct list_head *log_bufs,
+-						     int write_op);
++						     int write_op,
++						     struct cause_list*);
+ 
+ /* Recovery revoke support */
+ extern int	jbd2_journal_set_revoke(journal_t *, unsigned long long, tid_t);
