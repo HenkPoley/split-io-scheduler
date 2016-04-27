@@ -1,0 +1,21 @@
+Index: linux-4.0/block/bio.c
+===================================================================
+--- linux-4.0.orig/block/bio.c	2016-04-26 14:57:36.429882192 +0200
++++ linux-4.0/block/bio.c	2016-04-26 14:58:00.383214911 +0200
+@@ -28,6 +28,7 @@
+ #include <linux/mempool.h>
+ #include <linux/workqueue.h>
+ #include <linux/cgroup.h>
++#include <linux/cause_tags.h>
+ 
+ #include <trace/events/block.h>
+ 
+@@ -247,6 +248,8 @@
+ 	struct bio_set *bs = bio->bi_pool;
+ 	void *p;
+ 
++	del_cause_list_list(bio->cll);
++
+ 	__bio_free(bio);
+ 
+ 	if (bs) {

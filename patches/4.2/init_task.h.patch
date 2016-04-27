@@ -1,0 +1,13 @@
+Index: linux-4.2/include/linux/init_task.h
+===================================================================
+--- linux-4.2.orig/include/linux/init_task.h	2016-04-26 17:00:39.279931631 +0200
++++ linux-4.2/include/linux/init_task.h	2016-04-26 17:00:39.273264964 +0200
+@@ -179,6 +179,8 @@
+  */
+ #define INIT_TASK(tsk)	\
+ {									\
++	.causes     = NULL,                     \
++	.account_id     = ATOMIC_INIT(0),	\
+ 	.state		= 0,						\
+ 	.stack		= &init_thread_info,				\
+ 	.usage		= ATOMIC_INIT(2),				\

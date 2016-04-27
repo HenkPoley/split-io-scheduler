@@ -1,0 +1,12 @@
+Index: linux-4.2/mm/page-writeback.c
+===================================================================
+--- linux-4.2.orig/mm/page-writeback.c	2016-04-26 17:00:58.466597805 +0200
++++ linux-4.2/mm/page-writeback.c	2016-04-26 17:00:58.463264472 +0200
+@@ -2334,6 +2334,7 @@
+ 		ret = generic_writepages(mapping, wbc);
+ 	return ret;
+ }
++EXPORT_SYMBOL(do_writepages);
+ 
+ /**
+  * write_one_page - write out a single page and optionally wait on I/O

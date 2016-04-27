@@ -76,21 +76,24 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * Fixed in 3.4 patch: printf misuse of %d for a size_t complaint during build (should be %zu)
 * Lost track of one of the 'here dirty' *comments* in fs/xfs/xfs_inode.c in Linux v3.5. Ah well..
 * Removed large-ish "SAMER" comment in fs/btrfs/extent_io.c in Linux v3.8 patchset.
+* Commented out request_sanity_check() in fs/btrfs/extent_io.c in kernel 3.14, as it was no longer compatible
 
 
 ## TODO
 
+* Test whether these kernels still boot O:-)
+* Check if everything in 3.2.51 is still represented in the latest patchset, and in a sane place.
+* Figure out if new block dirtying have been introduced in later kernels that need 'causes' tagged.
+* Figure out some benchmarks to test if it still does anything.
 * Change modules/Makefile so you can also build the modules before booting the kernel.
 * Merge patches together into sensible patchsets, instead of per file
 * Fix kernel compilation linking failure with BTRFS / Ext4 / XFS as modules.
-* Test if kernels also boot O:-)
 * Do regression testing with SibylFS if the extra locking does not introduce bugs: https://sibylfs.github.io/
 * Check that the kernel thread changes do not introduce problems, with KernelThreadSanitizer (Linux 4.x): https://github.com/google/ktsan
-* Maybe cleanup all the commented printk() in block/cfq-iosched.c & fs/btrfs/file.c
-* Why is cfq_latency = 0 in block/cfq-iosched.c (instead of vanilla default 1)
-* Maybe remove the request_sanity_check() in fs/btrfs/extent_io.c. Thought it was used in modules/tbucket.c, but it's not.
+* Clean out comments, such as all the commented printk() in block/cfq-iosched.c & fs/btrfs/file.c
+* Why is cfq_latency = 0 in block/cfq-iosched.c (instead of vanilla default 1) ?
 * BUG? It feels to me like the sched_uniq++ construct in block/elevator.c will not work properly in the Linux v3.5 patch. I suspect it was supposed to give every new loaded I/O scheduler (elevator) a new unique ID. From what I can see it always either becomes 1000, 1001, or 1. Because it doesn't track an atomic incrementing counter elsewhere. It just writes on newly created elevator queues. But maybe those inherit pretty much everything from the previous one (?)
-* Since SPLIT_NODEP is not defined, maybe remove the #ifndef SPLIT_NODEP / #endif checks.
+* Since SPLIT_NODEP is not defined, maybe remove the #ifndef SPLIT_NODEP / #endif checks. Check the paper what this is supposed to do.
 
 ## Order of back/forward porting
 
@@ -118,3 +121,4 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 3.19 - Applied in one go, just refreshed patches for good measure. Compiles. Not tested.
 * 4.0 - Seems like somebody did some copy-pasting in fs/xfs/xfs_inode.c, pasted yangsuli *comment* in both places. Otherwise straightforward. Compiles. Not tested.
 * 4.1 - Seemed straightforward. Compiles. Not tested.
+* 4.2 - Seemed straightforward. Had a problem with INIT_TASK() in init/init_task.c. Solved by putting causes and account_id in task_struct of include/linux/sched.h, where it belongs. Code got there because they moved a few lines where the patch relied on. Compiles. Not tested.
