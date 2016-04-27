@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/jbd2/commit.c
 ===================================================================
 --- linux-4.5.orig/fs/jbd2/commit.c	2016-04-27 15:37:09.242438463 +0200
-+++ linux-4.5/fs/jbd2/commit.c	2016-04-27 18:45:35.035223890 +0200
++++ linux-4.5/fs/jbd2/commit.c	2016-04-27 19:43:43.868431207 +0200
 @@ -28,6 +28,9 @@
  #include <linux/blkdev.h>
  #include <linux/bitops.h>
@@ -105,7 +105,7 @@ Index: linux-4.5/fs/jbd2/commit.c
 +	do_gettimeofday(&wait_end);
 +
 +	if (is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10) {
-+		fs_info(fsdev, "yangsuli: j_wait_updates take %d ms\n",
++		printk(KERN_INFO "yangsuli: j_wait_updates take %d ms\n",
 +			   get_time_diff(&wait_end, &wait_start));
 +	}
 +#endif
@@ -183,7 +183,7 @@ Index: linux-4.5/fs/jbd2/commit.c
 +#ifdef SPLIT_DEBUG
 +	do_gettimeofday(&wait_end);
 +	if (is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10) {
-+		fs_info(fsdev, "yangsuli: journal_wait_on_commit_record take %d ms\n",
++		printk(KERN_INFO "yangsuli: journal_wait_on_commit_record take %d ms\n",
 +			   get_time_diff(&wait_end, &wait_start));
 +	}
 +
@@ -196,7 +196,7 @@ Index: linux-4.5/fs/jbd2/commit.c
 +#ifdef SPLIT_DEBUG
 +	do_gettimeofday(&wait_end);
 +	if (is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10) {
-+		fs_info(fsdev, "yangsuli: journal_blkdev_issue_flush take %d ms\n",
++		printk(KERN_INFO "yangsuli: journal_blkdev_issue_flush take %d ms\n",
 +			   get_time_diff(&wait_end, &wait_start));
 +	}
 +#endif

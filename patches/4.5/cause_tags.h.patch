@@ -1,7 +1,7 @@
 Index: linux-4.5/include/linux/cause_tags.h
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ linux-4.5/include/linux/cause_tags.h	2016-04-27 19:00:55.261857318 +0200
++++ linux-4.5/include/linux/cause_tags.h	2016-04-27 19:36:06.881781046 +0200
 @@ -0,0 +1,145 @@
 +#ifndef _LINUX_CAUSE_TAGS_H
 +#define _LINUX_CAUSE_TAGS_H
@@ -108,8 +108,8 @@ Index: linux-4.5/include/linux/cause_tags.h
 +void add_causes_zero_to_bio(struct bio *, int);
 +void move_causes_bh_to_bio(struct buffer_head *, struct bio *);
 +int __cause_list_add(struct cause_list *, int);
-+int cause_list_add(struct task_struct **, struct task_struct *);
-+int cause_list_copy(struct cause_list *, struct task_struct **);
++int cause_list_add(struct cause_list **, struct task_struct *);
++int cause_list_copy(struct cause_list *, struct cause_list **);
 +void set_cause_list_type(struct cause_list *, int);
 +
 +struct cause_list_list *new_cause_list_list(int item_capacity);
@@ -132,10 +132,10 @@ Index: linux-4.5/include/linux/cause_tags.h
 +					struct bio *bio) {}
 +static int __cause_list_add(struct cause_list *cause_list, int account_id)
 +	{ return 0; }
-+static int cause_list_add(struct task_struct **c,
++static int cause_list_add(struct cause_list **c,
 +					struct task_struct *t) { return 0; }
 +static int cause_list_copy(struct cause_list *from,
-+					struct task_struct **to) { return 0; }
++					struct cause_list **to) { return 0; }
 +static void set_cause_list_type(struct cause_list *cl, int type) {}
 +
 +static struct cause_list_list *new_cause_list_list(int item_capacity)
