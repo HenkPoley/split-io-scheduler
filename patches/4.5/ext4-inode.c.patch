@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/ext4/inode.c
 ===================================================================
---- linux-4.5.orig/fs/ext4/inode.c	2016-04-27 09:54:00.004979634 +0200
-+++ linux-4.5/fs/ext4/inode.c	2016-04-27 09:53:59.998312967 +0200
+--- linux-4.5.orig/fs/ext4/inode.c	2016-04-27 15:37:09.335771794 +0200
++++ linux-4.5/fs/ext4/inode.c	2016-04-27 18:22:14.295274485 +0200
 @@ -37,6 +37,7 @@
  #include <linux/printk.h>
  #include <linux/slab.h>
@@ -14,7 +14,7 @@ Index: linux-4.5/fs/ext4/inode.c
  	/* Buffer that doesn't need mapping for writeback? */
  	if (!buffer_dirty(bh) || !buffer_mapped(bh) ||
  	    (!buffer_delay(bh) && !buffer_unwritten(bh))) {
-+		// are we a proxy?
++		/* are we a proxy? */
 +		if (current->causes)
 +			cause_list_copy(bh->causes, &current->causes);
 +
@@ -39,7 +39,7 @@ Index: linux-4.5/fs/ext4/inode.c
 +				       bool *give_up_on_write)
 +{
 +	int ret = __mpage_map_and_submit_extent(handle, mpd, give_up_on_write);
-+	// we are no longer acting as a proxy for dirty buffers
++	/* we are no longer acting as a proxy for dirty buffers */
 +	put_cause_list(current->causes);
 +	current->causes = new_cause_list();
 +
@@ -53,7 +53,7 @@ Index: linux-4.5/fs/ext4/inode.c
  		ext4_journal_stop(handle);
  	}
  
-+	// now acting as cause proxy
++	/* now acting as cause proxy */
 +	BUG_ON(current->causes);
 +	current->causes = new_cause_list();
 +
@@ -64,7 +64,7 @@ Index: linux-4.5/fs/ext4/inode.c
  		mapping->writeback_index = mpd.first_page;
  
  out_writepages:
-+	// done acting as cause proxy
++	/* done acting as cause proxy */
 +	put_cause_list(current->causes);
 +	current->causes = NULL;
 +

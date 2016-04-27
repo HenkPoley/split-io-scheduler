@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/btrfs/extent_io.c
 ===================================================================
---- linux-4.5.orig/fs/btrfs/extent_io.c	2016-04-27 09:54:03.144979553 +0200
-+++ linux-4.5/fs/btrfs/extent_io.c	2016-04-27 09:54:03.141646220 +0200
+--- linux-4.5.orig/fs/btrfs/extent_io.c	2016-04-27 15:37:09.395771793 +0200
++++ linux-4.5/fs/btrfs/extent_io.c	2016-04-27 18:20:28.255278315 +0200
 @@ -21,6 +21,8 @@
  #include "rcu-string.h"
  #include "backref.h"
@@ -11,29 +11,32 @@ Index: linux-4.5/fs/btrfs/extent_io.c
  static struct kmem_cache *extent_state_cache;
  static struct kmem_cache *extent_buffer_cache;
  static struct bio_set *btrfs_bioset;
-@@ -2756,6 +2758,42 @@
+@@ -2756,6 +2758,45 @@
  
  }
  
-+void copy_causes_page_to_bio(struct page *page, struct bio *bio, size_t page_size) {
++void copy_causes_page_to_bio(struct page *page, struct bio *bio,
++			size_t page_size)
++{
 +#ifndef DISABLE_CAUSES  /*just to enable search in code for changes*/
 +#endif
-+	//yangsuli ? why >> 1
-+	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 1;
-+	struct cause_list_locked* locked_causes = (struct cause_list_locked*) page->locked_causes;
-+	if(!locked_causes){
++	/* yangsuli ? why >> 1 */
++	int max_pages_per_bio =
++		queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 1;
++	struct cause_list_locked *locked_causes = (struct cause_list_locked *) page->locked_causes;
++
++	if (!locked_causes)
 +		return;
-+	}
-+	if(!(locked_causes->causes)){
++
++	if (!(locked_causes->causes))
 +		return;
-+	}
 +
 +	if (!bio->cll)
 +		bio->cll = new_cause_list_list(max_pages_per_bio);
 +
 +	BUG_ON(page->locked_causes == NULL);
 +	spin_lock(&locked_causes->lock);
-+	if(!(locked_causes->causes)){
++	if (!(locked_causes->causes)) {
 +		spin_unlock(&locked_causes->lock);
 +		return;
 +	}
@@ -44,9 +47,9 @@ Index: linux-4.5/fs/btrfs/extent_io.c
 +	locked_causes->causes->size = page_size;
 +	cause_list_list_add(bio->cll, locked_causes->causes);
 +
-+	// free cause list
++	/* free cause list */
 +	put_cause_list(locked_causes->causes);
-+//yangsuli: why???
++	/*yangsuli: why??? */
 +	locked_causes->causes = NULL;
 +	spin_unlock(&locked_causes->lock);
 +}
@@ -54,7 +57,7 @@ Index: linux-4.5/fs/btrfs/extent_io.c
  static int submit_extent_page(int rw, struct extent_io_tree *tree,
  			      struct writeback_control *wbc,
  			      struct page *page, sector_t sector,
-@@ -2782,6 +2820,9 @@
+@@ -2782,6 +2823,9 @@
  		else
  			contig = bio_end_sector(bio) == sector;
  
@@ -64,7 +67,7 @@ Index: linux-4.5/fs/btrfs/extent_io.c
  		if (prev_bio_flags != bio_flags || !contig ||
  		    force_bio_submit ||
  		    merge_bio(rw, tree, page, offset, page_size, bio, bio_flags) ||
-@@ -2806,6 +2847,9 @@
+@@ -2806,6 +2850,9 @@
  		return -ENOMEM;
  
  	bio_add_page(bio, page, page_size, offset);
@@ -74,51 +77,3 @@ Index: linux-4.5/fs/btrfs/extent_io.c
  	bio->bi_end_io = end_io_func;
  	bio->bi_private = tree;
  	if (wbc) {
-@@ -3469,6 +3513,47 @@
- 	return ret;
- }
- 
-+// static void request_sanity_check(struct bio *bio) {
-+// 	struct cause_list *causes;
-+// 	//struct bio *bio = rq->bio;
-+// 	WARN_ON(bio == NULL);
-+// 	while (bio != NULL) {
-+// 		// (cll set) iff (req is a write)
-+// 		//WARN_ON((bio->cll != NULL) && (rq_data_dir(rq) == READ));
-+// 		//WARN_ON((bio->cll == NULL) && (rq_data_dir(rq) == WRITE));
-+// 		if (bio->cll ) {
-+// 			int cl_count = 0;
-+// 			int cl_bytes = 0;
-+// 			int i;
-+// 			for (i=0; i < bio->cll->item_count; i++) {
-+// 				causes = bio->cll->items[i];
-+// 				if (causes->type != SPLIT_ZERO) {
-+// 					WARN_ON(causes->size != (4 * 1024));
-+// 					// sometimes transactions are commited without any I/O
-+// 					// for processes, so journal cause_list's may be empty
-+// 					if (causes->type != SPLIT_JOURNAL)
-+// 						WARN_ON(causes->item_count == 0);
-+// 				}
-+// 				cl_count++;
-+// 				cl_bytes += causes->size;
-+// 			}
-+//
-+// 			if(bio->cll->size != bio->bi_size){
-+// 				printk("size not match cll_>size = %zu, bio->size = %d", bio->cll->size, bio->bi_size);
-+// 			}
-+// /*			if(bio->cll->size != bio->bi_size) {
-+// 				printk(KERN_INFO "mismatch %ld != %d (%d)",
-+// 					   bio->cll->size, bio->bi_size,
-+// 					   bio->cll->item_count);
-+// 			}
-+// */
-+// 			WARN_ON(cl_count != bio->cll->item_count);
-+// 			WARN_ON(cl_bytes != bio->cll->size);
-+// 		}
-+// 		bio = bio->bi_next;
-+// 	}
-+// }
-+
- /*
-  * the writepage semantics are similar to regular writepage.  extent
-  * records are inserted to lock ranges in the tree, and as dirty areas

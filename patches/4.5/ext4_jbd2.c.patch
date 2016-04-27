@@ -1,7 +1,7 @@
-Index: linux-4.1/fs/ext4/ext4_jbd2.c
+Index: linux-4.5/fs/ext4/ext4_jbd2.c
 ===================================================================
---- linux-4.1.orig/fs/ext4/ext4_jbd2.c	2016-04-26 15:18:23.373183546 +0200
-+++ linux-4.1/fs/ext4/ext4_jbd2.c	2016-04-26 15:18:23.366516879 +0200
+--- linux-4.5.orig/fs/ext4/ext4_jbd2.c	2016-04-27 15:37:09.365771794 +0200
++++ linux-4.5/fs/ext4/ext4_jbd2.c	2016-04-27 19:28:11.375131555 +0200
 @@ -5,6 +5,7 @@
  #include "ext4_jbd2.h"
  
@@ -15,7 +15,7 @@ Index: linux-4.1/fs/ext4/ext4_jbd2.c
  	int err = 0;
  
 +#ifndef DISABLE_CAUSES
-+	// add this cause (meta write)
++	/* add this cause (meta write) */
 +	spin_lock(&bh->causes_lock);
 +	cause_list_add(&bh->causes, current);
 +	set_cause_list_type(bh->causes, SPLIT_CHECKPOINT);

@@ -1,7 +1,7 @@
 Index: linux-4.5/include/linux/blkdev.h
 ===================================================================
---- linux-4.5.orig/include/linux/blkdev.h	2016-04-27 09:53:41.141646784 +0200
-+++ linux-4.5/include/linux/blkdev.h	2016-04-27 09:53:41.134980117 +0200
+--- linux-4.5.orig/include/linux/blkdev.h	2016-04-27 15:37:08.955771804 +0200
++++ linux-4.5/include/linux/blkdev.h	2016-04-27 19:26:30.495135199 +0200
 @@ -130,6 +130,7 @@
  		struct rb_node rb_node;	/* sort/lookup */
  		void *completion_data;
@@ -15,7 +15,7 @@ Index: linux-4.5/include/linux/blkdev.h
  
  	bool			mq_sysfs_init_done;
 +
-+	// this allows us to identify when schedulers have switched
++	/* this allows us to identify when schedulers have switched */
 +	int sched_uniq;
  };
  
@@ -29,16 +29,16 @@ Index: linux-4.5/include/linux/blkdev.h
 +
 +struct request_queue *inode_to_request_queue(struct inode *inode);
 +
-+void get_elevator_call_info_from_inode(struct inode* inode,
-+										  struct request_queue **rq,
-+										  struct module **module,
-+										  struct elevator_syscall_ops *sops);
++void get_elevator_call_info_from_inode(struct inode *inode,
++					struct request_queue **rq,
++					struct module **module,
++					struct elevator_syscall_ops *sops);
 +
 +
-+void get_elevator_call_info(struct file* filp,
-+										  struct request_queue **rq,
-+										  struct module **module,
-+										  struct elevator_syscall_ops *sops);
++void get_elevator_call_info(struct file *filp,
++					struct request_queue **rq,
++					struct module **module,
++					struct elevator_syscall_ops *sops);
 +
 +
  #endif

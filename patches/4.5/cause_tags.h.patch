@@ -1,6 +1,8 @@
---- linux-3.2.51/include/linux/cause_tags.h	1970-01-01 01:00:00.000000000 +0100
-+++ ../split-release/release/linux-3.2.51/include/linux/cause_tags.h	2015-09-01 05:42:28.000000000 +0200
-@@ -0,0 +1,141 @@
+Index: linux-4.5/include/linux/cause_tags.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux-4.5/include/linux/cause_tags.h	2016-04-27 19:00:55.261857318 +0200
+@@ -0,0 +1,145 @@
 +#ifndef _LINUX_CAUSE_TAGS_H
 +#define _LINUX_CAUSE_TAGS_H
 +
@@ -8,15 +10,15 @@
 +#include <linux/kref.h>
 +
 +
-+// uncomment this to disable (nearly) all cause_list
-+// code for debugging purposes.
-+//
-+// #define DISABLE_CAUSES
++/* uncomment this to disable (nearly) all cause_list
++ * code for debugging purposes.
++ */
++/* #define DISABLE_CAUSES */
 +
-+// uncomment this to disable alloc/free counters
-+//#define DISABLE_CAUSES_ALLOC_COUNTERS
++/* uncomment this to disable alloc/free counters */
++/* #define DISABLE_CAUSES_ALLOC_COUNTERS */
 +
-+// uncomment this to disable magic checks and line tracking for new
++/* uncomment this to disable magic checks and line tracking for new */
 +#define DISABLE_CAUSES_DEBUG
 +
 +struct buffer_head;
@@ -36,7 +38,7 @@
 +	int account_id;
 +};
 +
-+struct cause_list_mem_desc{
++struct cause_list_mem_desc {
 +	int cause_list_alloc;
 +	int cause_list_free;
 +	int cause_item_alloc;
@@ -50,39 +52,39 @@
 +#endif
 +
 +	struct kref refcount;
-+	int type;                  // (e.g., SPLIT_META)
-+	struct list_head items;    // list of io_causes's
++	int type;                  /* (e.g., SPLIT_META) */
++	struct list_head items;    /* list of io_causes's */
 +	int item_count;
 +
-+	// assume one request_queue per buffer.
-+	//
-+	// when a cause_list is free'd, we may notify the scheduler.
-+	// but only if
-+	//    callback_q != NULL
-+    //   AND
-+	//    callback_q->sched_uniq == sched_uniq
++	/* assume one request_queue per buffer.
++	 *
++	 * when a cause_list is free'd, we may notify the scheduler.
++	 * but only if
++	 *     callback_q != NULL
++	 *     AND
++	 *     callback_q->sched_uniq == sched_uniq
++	 */
 +	struct request_queue *callback_q;
 +	int sched_uniq;
 +	size_t size;
 +
-+	struct inode* inode;
++	struct inode *inode;
 +
-+	// for scheduler to as it pleases
-+	long private; // (maybe use as cost estimate)
++	long private; /* for split-level io scheduler; ex: cost estimate) */
 +};
 +
 +struct cause_list_list {
-+	struct cause_list* uniq_causes;
++	struct cause_list *uniq_causes;
 +	size_t size;
 +	int item_count;
 +	int item_capacity;
-+	struct cause_list *items[0]; // must be last field!
++	struct cause_list *items[0]; /* must be last field! */
 +};
 +
-+// a cause list with a lock to be used with pages
++/* a cause list with a lock to be used with pages */
 +struct cause_list_locked {
-+    spinlock_t lock;
-+    struct cause_list* causes;
++	spinlock_t lock;
++	struct cause_list *causes;
 +};
 +
 +#define new_cause_list() __new_cause_list(__LINE__)
@@ -96,50 +98,53 @@
 +#endif
 +
 +void cause_list_debug(void);
-+// all of these can accept a NULL cause_list; in this case, they do
-+// nothing.  new_cause_list() returns NULL if kmalloc fails.
-+struct cause_list* __new_cause_list(int line);
-+struct cause_list* get_cause_list(struct cause_list*);
-+void put_cause_list(struct cause_list*);
-+void put_cause_list_safe(struct cause_list*);
++/* all of these can accept a NULL cause_list; in this case, they do
++ * nothing.  new_cause_list() returns NULL if kmalloc fails.
++ */
++struct cause_list *__new_cause_list(int line);
++struct cause_list *get_cause_list(struct cause_list *);
++void put_cause_list(struct cause_list *);
++void put_cause_list_safe(struct cause_list *);
 +void add_causes_zero_to_bio(struct bio *, int);
 +void move_causes_bh_to_bio(struct buffer_head *, struct bio *);
-+int __cause_list_add(struct cause_list*, int);
-+int cause_list_add(struct cause_list**, struct task_struct*);
-+int cause_list_copy(struct cause_list*, struct cause_list**);
-+void set_cause_list_type(struct cause_list*, int);
++int __cause_list_add(struct cause_list *, int);
++int cause_list_add(struct task_struct **, struct task_struct *);
++int cause_list_copy(struct cause_list *, struct task_struct **);
++void set_cause_list_type(struct cause_list *, int);
 +
-+struct cause_list_list* new_cause_list_list(int item_capacity);
-+void del_cause_list_list(struct cause_list_list*);
-+void cause_list_list_add(struct cause_list_list*, struct cause_list*);
++struct cause_list_list *new_cause_list_list(int item_capacity);
++void del_cause_list_list(struct cause_list_list *);
++void cause_list_list_add(struct cause_list_list *, struct cause_list *);
 +
 +struct cause_list_mem_desc get_cause_list_mem(void);
 +
 +#else
 +
-+// for debugging
++/* for debugging */
 +static int cause_list_check(struct cause_list *cl) { return 0; }
 +static void cause_list_debug(void) {};
-+static struct cause_list* __new_cause_list(int line) { return NULL; }
-+static struct cause_list* get_cause_list(struct cause_list* c) { return NULL; }
-+static void put_cause_list(struct cause_list* c) {}
-+static void put_cause_list_safe(struct cause_list* c) {}
++static struct cause_list *__new_cause_list(int line) { return NULL; }
++static struct cause_list *get_cause_list(struct cause_list *c) { return NULL; }
++static void put_cause_list(struct cause_list *c) {}
++static void put_cause_list_safe(struct cause_list *c) {}
 +static void add_causes_zero_to_bio(struct bio *bio, int size) {}
 +static void move_causes_bh_to_bio(struct buffer_head *buf,
-+										 struct bio *bio) {}
-+static int __cause_list_add(struct cause_list* cause_list, int account_id) { return 0; }
-+static int cause_list_add(struct cause_list** c,
-+							  struct task_struct* t) { return 0;}
-+static int cause_list_copy(struct cause_list* from,
-+								  struct cause_list** to) { return 0;}
-+static void set_cause_list_type(struct cause_list* cl, int type) {}
++					struct bio *bio) {}
++static int __cause_list_add(struct cause_list *cause_list, int account_id)
++	{ return 0; }
++static int cause_list_add(struct task_struct **c,
++					struct task_struct *t) { return 0; }
++static int cause_list_copy(struct cause_list *from,
++					struct task_struct **to) { return 0; }
++static void set_cause_list_type(struct cause_list *cl, int type) {}
 +
-+static struct cause_list_list* new_cause_list_list(int item_capacity) { return NULL; }
++static struct cause_list_list *new_cause_list_list(int item_capacity)
++	{ return NULL; }
 +static void del_cause_list_list(struct cause_list_list *cll) {}
 +static void cause_list_list_add(struct cause_list_list *cll,
-+								struct cause_list *cl) {}
-+static struct cause_list_mem_desc get_cause_list_mem(void) {struct cause_list_mem_desc desc; return desc; }
++					struct cause_list *cl) {}
++static struct cause_list_mem_desc get_cause_list_mem(void)
++	{ struct cause_list_mem_desc desc; return desc; }
 +#endif
 +
 +#endif
-diff -rubBN linux-3.2.51/include/linux/elevator.h ../split-release/release/linux-3.2.51/include/linux/elevator.h

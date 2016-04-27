@@ -1,8 +1,8 @@
-Index: linux-3.3/block/cause_tags.c
+Index: linux-4.5/block/cause_tags.c
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ linux-3.3/block/cause_tags.c	2016-04-25 12:03:22.109777693 +0200
-@@ -0,0 +1,364 @@
++++ linux-4.5/block/cause_tags.c	2016-04-27 19:16:36.995156636 +0200
+@@ -0,0 +1,398 @@
 +#include <linux/slab.h>
 +#include <linux/sched.h>
 +#include <linux/cause_tags.h>
@@ -20,18 +20,22 @@ Index: linux-3.3/block/cause_tags.c
 +static atomic_t cause_item_alloc = ATOMIC_INIT(0);
 +static atomic_t cause_item_free = ATOMIC_INIT(0);
 +
-+void cause_list_debug(void) {
++void cause_list_debug(void)
++{
 +	int alloc = atomic_read(&cause_list_alloc);
 +	int free = atomic_read(&cause_list_free);
-+	printk(KERN_INFO "cause_list alloc=%d, free=%d",
++
++	fs_info(fsdev "cause_list alloc=%d, free=%d",
 +		   alloc, free);
 +}
 +EXPORT_SYMBOL(cause_list_debug);
 +
 +#ifndef DISABLE_CAUSES_DEBUG
-+// return 1 if magic is wrong or mem is bad
-+int cause_list_check(struct cause_list *cl) {
++/* return 1 if magic is wrong or mem is bad */
++int cause_list_check(struct cause_list *cl)
++{
 +	char tmp;
++
 +	if (!cl) {
 +		WARN_ON("cannot check_magic on NULL causes");
 +		return 1;
@@ -53,8 +57,10 @@ Index: linux-3.3/block/cause_tags.c
 +EXPORT_SYMBOL(cause_list_check);
 +#endif
 +
-+struct cause_list* __new_cause_list(int line) {
-+	struct cause_list* cl = kmalloc(sizeof(*cl), GFP_ATOMIC);
++struct cause_list *__new_cause_list(int line)
++{
++	struct cause_list *cl = kmalloc(sizeof(*cl), GFP_ATOMIC);
++
 +	if (cl != NULL) {
 +		memset(cl, 0, sizeof(*cl));
 +#ifndef DISABLE_CAUSES_ALLOC_COUNTERS
@@ -74,34 +80,35 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(__new_cause_list);
 +
-+static void free_cause_list(struct kref *ref) {
-+	struct cause_list* cl;
++static void free_cause_list(struct kref *ref)
++{
++	struct cause_list *cl;
 +	struct list_head *cause_node;
 +	struct list_head *tmp;
 +	struct request_queue *q = NULL;
 +	elevator_causes_free_fn *causes_free_fn = NULL;
++
 +	cl = container_of(ref, struct cause_list, refcount);
 +
 +	if (cause_list_check(cl))
 +		return;
 +
-+	// notify sched
++	/* notify sched */
 +	q = cl->callback_q;
 +	if (q) {
 +		spin_lock_irq(q->queue_lock);
-+		if(q->sched_uniq == cl->sched_uniq){
-+
++		if (q->sched_uniq == cl->sched_uniq) {
 +			causes_free_fn = q->elevator->type->ops.elevator_causes_free_fn;
-+			if (causes_free_fn) {
++			if (causes_free_fn)
 +				causes_free_fn(q, cl);
-+			}
 +		}
 +		spin_unlock_irq(q->queue_lock);
 +	}
 +
-+	// cleanup list
++	/* cleanup list */
 +	list_for_each_safe(cause_node, tmp, &cl->items) {
 +		struct io_cause *cause;
++
 +		cause = list_entry(cause_node, struct io_cause, list);
 +		list_del(cause_node);
 +		kfree(cause);
@@ -118,7 +125,8 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(free_cause_list);
 +
-+struct cause_list* get_cause_list(struct cause_list* cause_list) {
++struct cause_list *get_cause_list(struct cause_list *cause_list)
++{
 +	if (cause_list == NULL)
 +		return NULL;
 +	if (cause_list_check(cause_list))
@@ -128,7 +136,8 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(get_cause_list);
 +
-+void put_cause_list(struct cause_list* cause_list) {
++void put_cause_list(struct cause_list *cause_list)
++{
 +	if (!cause_list)
 +		return;
 +	if (cause_list_check(cause_list))
@@ -138,20 +147,26 @@ Index: linux-3.3/block/cause_tags.c
 +EXPORT_SYMBOL(put_cause_list);
 +
 +struct put_cause_list_work {
-+	struct cause_list* cause_list;
++	struct cause_list *cause_list;
 +	struct work_struct work;
 +};
 +
-+void do_put_cause_list_work(struct work_struct *work){
-+	struct put_cause_list_work *put_cause_list_work = container_of(work, struct put_cause_list_work, work);
++void do_put_cause_list_work(struct work_struct *work)
++{
++	struct put_cause_list_work *put_cause_list_work =
++		container_of(work, struct put_cause_list_work, work);
++
 +	if (cause_list_check(put_cause_list_work->cause_list))
 +		return;
 +	put_cause_list(put_cause_list_work->cause_list);
 +	kfree(put_cause_list_work);
 +}
 +
-+void put_cause_list_safe(struct cause_list* cause_list){
-+	struct put_cause_list_work *put_cause_list_work = kmalloc(sizeof(*put_cause_list_work), GFP_ATOMIC);
++void put_cause_list_safe(struct cause_list *cause_list)
++{
++	struct put_cause_list_work *put_cause_list_work =
++		kmalloc(sizeof(*put_cause_list_work), GFP_ATOMIC);
++
 +	if (!put_cause_list_work) {
 +		WARN_ON("could not kmalloc causes safe put struct");
 +		return;
@@ -165,11 +180,13 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(put_cause_list_safe);
 +
-+int __cause_list_add(struct cause_list* cause_list,
-+					 int account_id) {
-+	int already_exists = 0;
++int __cause_list_add(struct cause_list *cause_list,
++					 int account_id)
++{
 +	struct list_head *cause_node;
-+    struct io_cause *cause;
++	struct io_cause *cause;
++
++	int already_exists = 0;
 +	int rv = 0;
 +
 +	if (cause_list == NULL)
@@ -178,9 +195,9 @@ Index: linux-3.3/block/cause_tags.c
 +	if (cause_list_check(cause_list))
 +		return 0;
 +
-+	// have we already listed this cause?
-+    list_for_each(cause_node, &cause_list->items) {
-+        cause = list_entry(cause_node, struct io_cause, list);
++	/* have we already listed this cause? */
++	list_for_each(cause_node, &cause_list->items) {
++		cause = list_entry(cause_node, struct io_cause, list);
 +		if (cause->account_id == account_id) {
 +			already_exists = 1;
 +			break;
@@ -201,27 +218,32 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(__cause_list_add);
 +
-+// either adds task (normal case) or copies tasks (proxy case)
-+//
-+// return number of new items added
-+int cause_list_add(struct cause_list** cause_list,
-+				   struct task_struct* task) {
++/* either adds task (normal case) or copies tasks (proxy case)
++ *
++ * return number of new items added
++ */
++int cause_list_add(struct cause_list **cause_list,
++				   struct task_struct *task)
++{
 +	if (!*cause_list)
 +		*cause_list = new_cause_list();
 +
 +	if (task->causes) {
-+		// proxy for other causes
++		/* proxy for other causes */
 +		return cause_list_copy(task->causes, cause_list);
 +	} else {
-+		return __cause_list_add(*cause_list, atomic_read(&task->account_id));
++		return __cause_list_add(*cause_list,
++				atomic_read(&task->account_id));
 +	}
 +}
 +EXPORT_SYMBOL(cause_list_add);
 +
-+int cause_list_copy(struct cause_list* from,
-+					struct cause_list** to) {
++int cause_list_copy(struct cause_list *from,
++					struct cause_list **to)
++{
 +	struct list_head *cause_node;
-+    struct io_cause *cause;
++	struct io_cause *cause;
++
 +	int rv = 0;
 +
 +	if (!*to)
@@ -235,17 +257,20 @@ Index: linux-3.3/block/cause_tags.c
 +	if (cause_list_check(*to))
 +		return 0;
 +
-+    list_for_each(cause_node, &from->items) {
-+        cause = list_entry(cause_node, struct io_cause, list);
++	list_for_each(cause_node, &from->items) {
++		cause = list_entry(cause_node, struct io_cause, list);
 +		rv += __cause_list_add(*to, cause->account_id);
 +	}
 +	return rv;
 +}
 +EXPORT_SYMBOL(cause_list_copy);
 +
-+void add_causes_zero_to_bio(struct bio *bio, int size) {
-+	struct cause_list* causes;
-+	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 3;
++void add_causes_zero_to_bio(struct bio *bio, int size)
++{
++	struct cause_list *causes;
++
++	int max_pages_per_bio =
++		queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 3;
 +
 +	if (!bio->cll)
 +		bio->cll = new_cause_list_list(max_pages_per_bio);
@@ -264,8 +289,10 @@ Index: linux-3.3/block/cause_tags.c
 +EXPORT_SYMBOL(add_causes_zero_to_bio);
 +
 +void move_causes_bh_to_bio(struct buffer_head *bh,
-+						   struct bio *bio) {
-+	int max_pages_per_bio = queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 3;
++						   struct bio *bio)
++{
++	int max_pages_per_bio =
++		queue_max_sectors(bdev_get_queue(bio->bi_bdev)) >> 3;
 +
 +	spin_lock(&bh->causes_lock);
 +	if (bh->causes) {
@@ -289,7 +316,8 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(move_causes_bh_to_bio);
 +
-+void set_cause_list_type(struct cause_list* cause_list, int type) {
++void set_cause_list_type(struct cause_list *cause_list, int type)
++{
 +	if (!cause_list)
 +		return;
 +	if (cause_list_check(cause_list))
@@ -298,14 +326,15 @@ Index: linux-3.3/block/cause_tags.c
 +}
 +EXPORT_SYMBOL(set_cause_list_type);
 +
-+///////////////////////////
-+// cause list list stuff //
-+///////////////////////////
++/* cause list list stuff */
 +
-+struct cause_list_list *new_cause_list_list(int item_capacity) {
++struct cause_list_list *new_cause_list_list(int item_capacity)
++{
 +	struct cause_list_list *cll = NULL;
 +	struct cause_list *uniq_causes = NULL;
++
 +	int alloc_size = sizeof(*cll) + sizeof(cll->items[0])*item_capacity;
++
 +	if (item_capacity < 0) {
 +		WARN_ON("cannot create negative capacity cll");
 +		return NULL;
@@ -318,18 +347,20 @@ Index: linux-3.3/block/cause_tags.c
 +		return NULL;
 +	}
 +	memset(cll, 0, alloc_size);
-+	// size and item_count are 0
++	/* size and item_count are 0 */
 +	cll->uniq_causes = uniq_causes;
 +	cll->item_capacity = item_capacity;
 +	return cll;
 +}
 +EXPORT_SYMBOL(new_cause_list_list);
 +
-+void del_cause_list_list(struct cause_list_list *cll) {
++void del_cause_list_list(struct cause_list_list *cll)
++{
 +	int i;
++
 +	if (!cll)
 +		return;
-+	for(i=0; i<cll->item_count; i++)
++	for (i = 0; i < cll->item_count; i++)
 +		put_cause_list(cll->items[i]);
 +	put_cause_list(cll->uniq_causes);
 +	kfree(cll);
@@ -337,7 +368,8 @@ Index: linux-3.3/block/cause_tags.c
 +EXPORT_SYMBOL(del_cause_list_list);
 +
 +void cause_list_list_add(struct cause_list_list *cll,
-+						 struct cause_list *cl) {
++						 struct cause_list *cl)
++{
 +	if (!cll || !cl)
 +		return;
 +	if (cll->item_count == cll->item_capacity) {
@@ -356,8 +388,10 @@ Index: linux-3.3/block/cause_tags.c
 +EXPORT_SYMBOL(cause_list_list_add);
 +
 +
-+struct cause_list_mem_desc get_cause_list_mem(){
++struct cause_list_mem_desc get_cause_list_mem(void)
++{
 +	struct cause_list_mem_desc desc;
++
 +	desc.cause_list_alloc = atomic_read(&cause_list_alloc);
 +	desc.cause_list_free = atomic_read(&cause_list_free);
 +	desc.cause_item_alloc = atomic_read(&cause_item_alloc);

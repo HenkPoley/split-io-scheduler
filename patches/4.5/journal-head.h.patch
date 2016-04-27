@@ -1,13 +1,13 @@
-Index: linux-3.10/include/linux/journal-head.h
+Index: linux-4.5/include/linux/journal-head.h
 ===================================================================
---- linux-3.10.orig/include/linux/journal-head.h	2016-04-26 05:53:46.137468527 +0200
-+++ linux-3.10/include/linux/journal-head.h	2016-04-26 05:53:46.130801860 +0200
+--- linux-4.5.orig/include/linux/journal-head.h	2016-04-27 15:37:09.742438450 +0200
++++ linux-4.5/include/linux/journal-head.h	2016-04-27 17:12:13.032878143 +0200
 @@ -101,6 +101,8 @@
  
  	/* Trigger type for the committing transaction's frozen data */
  	struct jbd2_buffer_trigger_type *b_frozen_triggers;
 +
-+	struct cause_list* causes;
++	struct cause_list *causes;
  };
  
  #endif		/* JOURNAL_HEAD_H_INCLUDED */

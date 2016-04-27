@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/btrfs/file.c
 ===================================================================
---- linux-4.5.orig/fs/btrfs/file.c	2016-04-27 09:54:07.624979438 +0200
-+++ linux-4.5/fs/btrfs/file.c	2016-04-27 09:54:07.621646105 +0200
+--- linux-4.5.orig/fs/btrfs/file.c	2016-04-27 15:37:09.455771791 +0200
++++ linux-4.5/fs/btrfs/file.c	2016-04-27 17:57:20.879447003 +0200
 @@ -140,6 +140,9 @@
  	return 1;
  }
@@ -16,47 +16,47 @@ Index: linux-4.5/fs/btrfs/file.c
  	}
  }
  
-+void add_to_causes(struct inode *inode, struct page *page, loff_t pos) {
++void add_to_causes(struct inode *inode, struct page *page, loff_t pos)
++{
 +#ifndef DISABLE_CAUSES
 +
 +	struct request_queue *q = NULL;
 +	elevator_causes_dirty_fn *causes_dirty_fn = NULL;
 +	int cause_added;
-+	struct cause_list_locked * locked_causes = (struct cause_list_locked *) page->locked_causes;
++	struct cause_list_locked *locked_causes =
++		(struct cause_list_locked *) page->locked_causes;
 +
-+	if(!locked_causes){
-+	//printk("### no causes.\n");
++	if (!locked_causes) {
 +	WARN_ON(1);
 +	return;
-+	}
-+	else{
-+	//printk("### causes.\n");
++	} else {
 +	}
 +
-+	// add this cause (data write)
++	/* add this cause (data write) */
 +	spin_lock(&locked_causes->lock);
-+	if(!(locked_causes->causes)){
-+	locked_causes->causes = new_cause_list();
-+	}
++	if (!(locked_causes->causes))
++		locked_causes->causes = new_cause_list();
++
 +	cause_added = cause_list_add(&locked_causes->causes, current);
 +	set_cause_list_type(locked_causes->causes, SPLIT_DATA);
 +
-+	// dirty hook
++	/* dirty hook */
 +	q = inode_to_request_queue(inode);
 +	if (q && locked_causes->causes && cause_added) {
 +		spin_lock_irq(q->queue_lock);
 +
-+	//yangsuli ????
++	/* yangsuli ???? */
 +		if (locked_causes->causes->callback_q == NULL) {
-+			// TODO(tyler): need refcount get on q?
++			/* TODO(tyler): need refcount get on q? */
 +			locked_causes->causes->callback_q = q;
 +			locked_causes->causes->sched_uniq = q->sched_uniq;
 +			locked_causes->causes->size = PAGE_CACHE_SIZE;
 +		}
-+		// one buffer can't correspond to many disks, right?
++		/* one buffer can't correspond to many disks, right? */
 +		WARN_ON(locked_causes->causes->callback_q != q);
 +
-+		causes_dirty_fn = q->elevator->type->ops.elevator_causes_dirty_fn;
++		causes_dirty_fn =
++			q->elevator->type->ops.elevator_causes_dirty_fn;
 +		if (causes_dirty_fn && q->sched_uniq == locked_causes->causes->sched_uniq)
 +			causes_dirty_fn(q, locked_causes->causes, current, inode, pos);
 +
@@ -85,32 +85,26 @@ Index: linux-4.5/fs/btrfs/file.c
  	gfp_t mask = btrfs_alloc_write_mask(inode->i_mapping);
  	int err = 0;
  	int faili;
-+	struct cause_list_locked * locked_causes;
++	struct cause_list_locked *locked_causes;
  
  	for (i = 0; i < num_pages; i++) {
  again:
-@@ -1337,6 +1396,27 @@
+@@ -1337,6 +1396,21 @@
  			goto fail;
  		}
  
 +#ifndef DISABLE_CAUSES
-+		// allocate the cause list if this a new page
-+		if (pages[i]->locked_causes == NULL){
-+			//printk("### No Causes.\n");
++		/* allocate the cause list if this a new page */
++		if (pages[i]->locked_causes == NULL) {
 +			pages[i]->locked_causes = kmalloc(sizeof(struct cause_list_locked), GFP_KERNEL);
 +			BUG_ON(!(pages[i]->locked_causes));
 +			locked_causes = (struct cause_list_locked *) pages[i]->locked_causes;
 +			spin_lock_init(&locked_causes->lock);
 +			locked_causes->causes = new_cause_list();
-+		}
-+		else{
++		} else {
 +			locked_causes = (struct cause_list_locked *) pages[i]->locked_causes;
-+			if (locked_causes->causes == NULL){
++			if (locked_causes->causes == NULL)
 +				locked_causes->causes = new_cause_list();
-+			}
-+			else{
-+		    		//printk("### has Causes.\n");
-+			}
 +		}
 +#endif
 +

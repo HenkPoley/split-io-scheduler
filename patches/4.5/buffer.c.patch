@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/buffer.c
 ===================================================================
---- linux-4.5.orig/fs/buffer.c	2016-04-27 09:53:49.014979915 +0200
-+++ linux-4.5/fs/buffer.c	2016-04-27 09:53:49.011646583 +0200
+--- linux-4.5.orig/fs/buffer.c	2016-04-27 15:37:09.059105134 +0200
++++ linux-4.5/fs/buffer.c	2016-04-27 19:23:49.215141025 +0200
 @@ -43,6 +43,7 @@
  #include <linux/mpage.h>
  #include <linux/bit_spinlock.h>
@@ -33,24 +33,24 @@ Index: linux-4.5/fs/buffer.c
  			mark_buffer_dirty(bh);
 +
 +#ifndef DISABLE_CAUSES
-+
 +			spin_lock(&bh->causes_lock);
-+			// add this cause (data write)
++			/* add this cause (data write) */
 +			cause_added = cause_list_add(&bh->causes, current);
 +			set_cause_list_type(bh->causes, SPLIT_DATA);
 +
-+			// dirty hook
++			/* dirty hook */
 +			q = inode_to_request_queue(inode);
 +			if (q && bh->causes && cause_added) {
 +				spin_lock_irq(q->queue_lock);
 +
 +				if (bh->causes->callback_q == NULL) {
-+					// TODO(tyler): need refcount get on q?
++			/* TODO(tyler): need refcount get on q? */
 +					bh->causes->callback_q = q;
 +					bh->causes->sched_uniq = q->sched_uniq;
 +					bh->causes->size = bh->b_size;
 +				}
-+				// one buffer can't correspond to many disks, right?
++
++				/* one buffer, one disk */
 +				WARN_ON(bh->causes->callback_q != q);
 +
 +				causes_dirty_fn = q->elevator->type->ops.elevator_causes_dirty_fn;
@@ -60,8 +60,8 @@ Index: linux-4.5/fs/buffer.c
 +				spin_unlock_irq(q->queue_lock);
 +			}
 +			spin_unlock(&bh->causes_lock);
-+
 +#endif
++
  		}
  		clear_buffer_new(bh);
  
@@ -79,7 +79,7 @@ Index: linux-4.5/fs/buffer.c
  {
  	struct inode *inode = page->mapping->host;
 -	__block_commit_write(inode,page,from,to);
-+	__block_commit_write(inode,page,from,to,-1);
++	__block_commit_write(inode, page, from, to, -1);
  	return 0;
  }
  EXPORT_SYMBOL(block_commit_write);

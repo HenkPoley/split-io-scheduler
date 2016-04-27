@@ -38,5 +38,3 @@ sched.h.patch
 super.c.patch
 sync.c.patch
 transaction.c.patch
-xfs_aops.c.patch
-xfs_inode.c.patch

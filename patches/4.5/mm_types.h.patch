@@ -1,15 +1,15 @@
 Index: linux-4.5/include/linux/mm_types.h
 ===================================================================
---- linux-4.5.orig/include/linux/mm_types.h	2016-04-27 09:54:28.311645575 +0200
-+++ linux-4.5/include/linux/mm_types.h	2016-04-27 09:54:28.304978908 +0200
+--- linux-4.5.orig/include/linux/mm_types.h	2016-04-27 15:37:09.832438449 +0200
++++ linux-4.5/include/linux/mm_types.h	2016-04-27 17:11:04.752880610 +0200
 @@ -215,7 +215,13 @@
  #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
  	int _last_cpupid;
  #endif
 +
-+    // cause list for btrfs
++/* cause list for btrfs */
 +#ifndef DISABLE_CAUSES
-+        void* locked_causes;
++	void *locked_causes;
 +#endif
  }
 +

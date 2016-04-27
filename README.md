@@ -77,6 +77,8 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * Lost track of one of the 'here dirty' *comments* in fs/xfs/xfs_inode.c in Linux v3.5. Ah well..
 * Removed large-ish "SAMER" comment in fs/btrfs/extent_io.c in Linux v3.8 patchset.
 * Commented out request_sanity_check() in fs/btrfs/extent_io.c in kernel 3.14, as it was no longer compatible
+* The variable `current` is a pointer to the current process.
+* BUG_ON() checks if something is zero/null, else it panicks the kernel
 
 
 ## TODO
@@ -94,6 +96,9 @@ sudo make headers_install INSTALL_HDR_PATH=/usr/include
 * Why is cfq_latency = 0 in block/cfq-iosched.c (instead of vanilla default 1) ?
 * BUG? It feels to me like the sched_uniq++ construct in block/elevator.c will not work properly in the Linux v3.5 patch. I suspect it was supposed to give every new loaded I/O scheduler (elevator) a new unique ID. From what I can see it always either becomes 1000, 1001, or 1. Because it doesn't track an atomic incrementing counter elsewhere. It just writes on newly created elevator queues. But maybe those inherit pretty much everything from the previous one (?)
 * Since SPLIT_NODEP is not defined, maybe remove the #ifndef SPLIT_NODEP / #endif checks. Check the paper what this is supposed to do.
+* Clean out SPLIT_DEBUG from fs/jbd2/commit.c
+* What is a "cause proxy" ?
+* Code documentation / story
 
 ## Order of back/forward porting
 
@@ -125,3 +130,51 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 4.3 - Seemed straightforward. Compiles. Not tested.
 * 4.4 - Seemed straightforward. Compiles. Not tested.
 * 4.5 - Seemed straightforward. Compiles. Not tested.
+* Ran scripts/checkpatch.pl, cleaned up remarks
+
+## Missing code verification
+
+Check if 3.2.51 and 4.5 have similar code in similar places.
+
+* bio.c - check
+* blk-core.c - check
+* blk-lib.c - check
+* blk_types.h - check
+* blk_dev.h - the include module.h was (re)moved, and unneeded. check
+* buffer.c - check
+* buffer_head.h - check
+* cause_tags.c - check
+* cause_tags.h - check
+* cfq-iosched.c - cleaned out commented code. This patch is not strictly necessary. It add a little message when you unload cfq that tells you how often it's queues were used. check
+* checkpoint.c - The call to jbd2_free_transaction() is now in the vanilla kernel, so no need to patch it in ourselves. I patched the cause tracking in there. check.
+* commit.c - Ought to figure out if I need to do anything with the dropped 'SPLIT_JOURNAL_META' cause, due to the reworked code that doesn't juggle multiple journal blocks. Since the regular 'SPLIT_JOURNAL' cause is still there I suspect it's fine. jbd2_free_transaction() is now in the vanilla kernel. A lot SPLIT_DEBUG segments, which mostly activate if you have a disk on /dev/sdf. Maybe remove those?
+* elevator.c - elv_dispatch_add_head() is unused in the kernel and modules, so I commented it out. check.
+* elevator.h - Removed the spurious elv_dispatch_add_head(). check.
+* ext4-inode.c - check
+* ext4_jbd2.c - check
+* extent_io.c - check
+* file.c - check
+* filemap.c - check
+* fs-ionode.c - Removed spurious SPLIT_NODEP. check
+* fsync.c - A lot SPLIT_DEBUG segments. check
+* hashtable.h - check
+* hrtime.c - check
+* init_task.h - check
+* jbd2.h - jbd2_free_transaction() is now in vanilla kernel. check
+* journal-head.h - check
+* journal.c - check
+* kthread.c - check
+* Makefile - check
+* mm_types.h - check
+* namei.c - check
+* page-io.c - check
+* page-writeback.c - check
+* read_write.c - check
+* revoke.c - check
+* sched.h - check
+* super.c - check
+* sync.c - check
+* transaction.c - removed SPLIT_NODEP. Removed commented code. check
+* xfs_aops.c - check. Removed path.
+* xfs_inode.c - just comments. check. Removed patch
+* xfs_vnodeops.c - removed patch. just comments.

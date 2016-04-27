@@ -1,26 +1,29 @@
-Index: linux-4.1/fs/ext4/fsync.c
+Index: linux-4.5/fs/ext4/fsync.c
 ===================================================================
---- linux-4.1.orig/fs/ext4/fsync.c	2016-04-26 15:18:37.116516527 +0200
-+++ linux-4.1/fs/ext4/fsync.c	2016-04-26 15:18:37.109849860 +0200
-@@ -84,6 +84,26 @@
+--- linux-4.5.orig/fs/ext4/fsync.c	2016-04-27 15:37:09.582438454 +0200
++++ linux-4.5/fs/ext4/fsync.c	2016-04-27 17:39:16.732819496 +0200
+@@ -84,6 +84,29 @@
   * inode to disk.
   */
  
 +#ifdef SPLIT_DEBUG
-+static inline int get_time_diff(struct timeval *end, struct timeval *start){
-+	return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_usec - start->tv_usec) / 1000;
++static inline int get_time_diff(struct timeval *end, struct timeval *start)
++{
++	return (end->tv_sec - start->tv_sec) * 1000 +
++		(end->tv_usec - start->tv_usec) / 1000;
 +}
 +
-+static int is_on_sdb(struct super_block *sb){
-+	if(!sb)
++static int is_on_sdb(struct super_block *sb)
++{
++	if (!sb)
 +		return 0;
-+	if(!sb->s_bdev)
++	if (!sb->s_bdev)
 +		return 0;
-+	if(!sb->s_bdev->bd_disk)
++	if (!sb->s_bdev->bd_disk)
 +		return 0;
-+	if(!sb->s_bdev->bd_disk->disk_name)
++	if (!sb->s_bdev->bd_disk->disk_name)
 +		return 0;
-+	if(strcmp(sb->s_bdev->bd_disk->disk_name, "sdf") == 0)
++	if (strcmp(sb->s_bdev->bd_disk->disk_name, "sdf") == 0)
 +		return 1;
 +	return 0;
 +}
@@ -29,7 +32,7 @@ Index: linux-4.1/fs/ext4/fsync.c
  int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
  {
  	struct inode *inode = file->f_mapping->host;
-@@ -92,7 +112,13 @@
+@@ -92,7 +115,13 @@
  	int ret = 0, err;
  	tid_t commit_tid;
  	bool needs_barrier = false;
@@ -43,7 +46,7 @@ Index: linux-4.1/fs/ext4/fsync.c
  	J_ASSERT(ext4_journal_current_handle() == NULL);
  
  	trace_ext4_sync_file_enter(file, datasync);
-@@ -112,7 +138,17 @@
+@@ -112,7 +141,18 @@
  		goto out;
  	}
  
@@ -53,15 +56,16 @@ Index: linux-4.1/fs/ext4/fsync.c
  	ret = filemap_write_and_wait_range(inode->i_mapping, start, end);
 +#ifdef SPLIT_DEBUG
 +	do_gettimeofday(&wait_end);
-+	if(is_on_sdb(sb)){
-+		printk("yangsuli: fsync on file %s take %d ms flushing its own file data\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start));
-+	}
++	if (is_on_sdb(sb))
++		fs_info(fsdev, "yangsuli: fsync on file %s take %d ms flushing its own file data\n",
++			file->f_dentry->d_name.name,
++			get_time_diff(&wait_end, &wait_start));
 +#endif
 +
  	if (ret)
  		return ret;
  	/*
-@@ -138,13 +174,41 @@
+@@ -138,13 +178,45 @@
  	if (journal->j_flags & JBD2_BARRIER &&
  	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
  		needs_barrier = true;
@@ -71,9 +75,10 @@ Index: linux-4.1/fs/ext4/fsync.c
  	ret = jbd2_complete_transaction(journal, commit_tid);
 +#ifdef SPLIT_DEBUG
 +	do_gettimeofday(&wait_end);
-+	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
-+		printk("yangsuli: fsync on file %s take %d ms waiting on commit %d\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start), commit_tid);
-+	}
++	if (is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10)
++		fs_info(fsdev, "yangsuli: fsync on file %s take %d ms waiting on commit %d\n",
++			file->f_dentry->d_name.name,
++			get_time_diff(&wait_end, &wait_start), commit_tid);
 +
 +	do_gettimeofday(&wait_start);
 +#endif
@@ -86,9 +91,10 @@ Index: linux-4.1/fs/ext4/fsync.c
 +
 +#ifdef SPLIT_DEBUG
 +	do_gettimeofday(&wait_end);
-+	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
-+		printk("yangsuli: fsync on file %s take %d ms issue blk_flush\n", file->f_dentry->d_name.name, get_time_diff(&wait_end, &wait_start));
-+	}
++	if (is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10)
++		fs_info(fsdev, "yangsuli: fsync on file %s take %d ms issue blk_flush\n",
++			file->f_dentry->d_name.name,
++			get_time_diff(&wait_end, &wait_start));
 +#endif
 +
  out:
@@ -96,8 +102,10 @@ Index: linux-4.1/fs/ext4/fsync.c
 +
 +#ifdef SPLIT_DEBUG
 +	do_gettimeofday(&wait_end2);
-+	if(is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10){
-+		printk("yangsuli: ext4_sync_file on file %s take %d ms\n", file->f_dentry->d_name.name, get_time_diff(&wait_end2, &wait_start2));
++	if (is_on_sdb(sb) && get_time_diff(&wait_end, &wait_start) >= 10) {
++		fs_info(fsdev, "yangsuli: ext4_sync_file on file %s take %d ms\n",
++			file->f_dentry->d_name.name,
++			get_time_diff(&wait_end2, &wait_start2));
 +	}
 +#endif
 +

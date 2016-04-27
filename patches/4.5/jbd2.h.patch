@@ -1,13 +1,13 @@
-Index: linux-4.4/include/linux/jbd2.h
+Index: linux-4.5/include/linux/jbd2.h
 ===================================================================
---- linux-4.4.orig/include/linux/jbd2.h	2016-04-27 09:37:20.855005257 +0200
-+++ linux-4.4/include/linux/jbd2.h	2016-04-27 09:37:20.848338591 +0200
+--- linux-4.5.orig/include/linux/jbd2.h	2016-04-27 15:37:09.679105119 +0200
++++ linux-4.5/include/linux/jbd2.h	2016-04-27 17:13:20.319542378 +0200
 @@ -693,6 +693,8 @@
  	 * structures associated with the transaction
  	 */
  	struct list_head	t_private_list;
 +
-+	struct cause_list* causes;
++	struct cause_list *causes;
  };
  
  struct transaction_run_stats_s {

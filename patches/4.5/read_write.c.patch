@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/read_write.c
 ===================================================================
---- linux-4.5.orig/fs/read_write.c	2016-04-27 09:52:51.111648067 +0200
-+++ linux-4.5/fs/read_write.c	2016-04-27 09:53:14.154980810 +0200
+--- linux-4.5.orig/fs/read_write.c	2016-04-27 15:37:09.969105111 +0200
++++ linux-4.5/fs/read_write.c	2016-04-27 17:01:13.852901952 +0200
 @@ -18,6 +18,8 @@
  #include <linux/compat.h>
  #include <linux/mount.h>
@@ -15,21 +15,22 @@ Index: linux-4.5/fs/read_write.c
  
  ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
  {
-+	struct request_queue* rq;
++	struct request_queue *rq;
 +	struct elevator_syscall_ops sops;
-+	struct module* module;
-+	void* opaque = NULL;
++	struct module *module;
++	void *opaque = NULL;
  	ssize_t ret;
  
  	if (!(file->f_mode & FMODE_WRITE))
-@@ -571,6 +577,17 @@
+@@ -571,6 +577,18 @@
  	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
  		return -EFAULT;
  
-+	// intercept entry
++	/* intercept entry */
 +	get_elevator_call_info(file, &rq, &module, &sops);
 +	if (sops.write_entry_fn) {
-+		ret = sops.write_entry_fn(rq, file, count, pos, &opaque, sops.sched_uniq);
++		ret = sops.write_entry_fn(rq, file, count, pos, &opaque,
++				sops.sched_uniq);
 +		if (ret) {
 +			BUG_ON(!module);
 +			module_put(module);
@@ -40,11 +41,11 @@ Index: linux-4.5/fs/read_write.c
  	ret = rw_verify_area(WRITE, file, pos, count);
  	if (ret >= 0) {
  		count = ret;
-@@ -584,6 +601,12 @@
+@@ -584,6 +602,12 @@
  		file_end_write(file);
  	}
  
-+	// intercept exit
++	/* intercept exit */
 +	if (sops.write_return_fn)
 +		sops.write_return_fn(rq, opaque, ret, sops.sched_uniq);
 +	if (module)

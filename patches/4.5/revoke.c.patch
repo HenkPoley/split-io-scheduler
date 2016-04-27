@@ -1,7 +1,7 @@
-Index: linux-4.2/fs/jbd2/revoke.c
+Index: linux-4.5/fs/jbd2/revoke.c
 ===================================================================
---- linux-4.2.orig/fs/jbd2/revoke.c	2016-04-26 17:01:04.713264312 +0200
-+++ linux-4.2/fs/jbd2/revoke.c	2016-04-26 17:01:04.706597645 +0200
+--- linux-4.5.orig/fs/jbd2/revoke.c	2016-04-27 15:37:09.995771778 +0200
++++ linux-4.5/fs/jbd2/revoke.c	2016-04-27 16:58:41.795120525 +0200
 @@ -94,6 +94,7 @@
  #include <linux/log2.h>
  #include <linux/hash.h>
@@ -16,7 +16,7 @@ Index: linux-4.2/fs/jbd2/revoke.c
  				    struct jbd2_revoke_record_s *, int);
 -static void flush_descriptor(journal_t *, struct buffer_head *, int, int);
 +static void flush_descriptor(journal_t *, struct buffer_head *, int, int,
-+				    struct cause_list* cause_list);
++				    struct cause_list *cause_list);
  #endif
  
  /* Utility functions to maintain the revoke table */
@@ -26,43 +26,45 @@ Index: linux-4.2/fs/jbd2/revoke.c
  				       struct list_head *log_bufs,
 -				       int write_op)
 +				       int write_op,
-+				       struct cause_list* cause_list)
++				       struct cause_list *cause_list)
  {
  	struct buffer_head *descriptor;
  	struct jbd2_revoke_record_s *record;
-@@ -553,7 +556,7 @@
+@@ -553,7 +556,8 @@
  		}
  	}
  	if (descriptor)
 -		flush_descriptor(journal, descriptor, offset, write_op);
-+		flush_descriptor(journal, descriptor, offset, write_op, cause_list);
++		flush_descriptor(journal, descriptor, offset, write_op,
++				cause_list);
  	jbd_debug(1, "Wrote %d revoke records\n", count);
  }
  
-@@ -597,7 +600,7 @@
+@@ -597,7 +601,8 @@
  	/* Make sure we have a descriptor with space left for the record */
  	if (descriptor) {
  		if (offset + sz > journal->j_blocksize - csum_size) {
 -			flush_descriptor(journal, descriptor, offset, write_op);
-+			flush_descriptor(journal, descriptor, offset, write_op, NULL);
++			flush_descriptor(journal, descriptor, offset, write_op,
++					NULL);
  			descriptor = NULL;
  		}
  	}
-@@ -654,7 +657,8 @@
+@@ -654,7 +659,8 @@
  
  static void flush_descriptor(journal_t *journal,
  			     struct buffer_head *descriptor,
 -			     int offset, int write_op)
 +			     int offset, int write_op,
-+			     struct cause_list* cause_list)
++			     struct cause_list *cause_list)
  {
  	jbd2_journal_revoke_header_t *header;
  
-@@ -670,6 +674,7 @@
+@@ -670,6 +676,7 @@
  	set_buffer_jwrite(descriptor);
  	BUFFER_TRACE(descriptor, "write");
  	set_buffer_dirty(descriptor);
-+	descriptor->causes = get_cause_list(cause_list); // new ref
++	descriptor->causes = get_cause_list(cause_list); /* new ref */
  	write_dirty_buffer(descriptor, write_op);
  }
  #endif

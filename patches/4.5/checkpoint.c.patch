@@ -1,14 +1,15 @@
-Index: linux-3.18/fs/jbd2/checkpoint.c
+Index: linux-4.5/fs/jbd2/checkpoint.c
 ===================================================================
---- linux-3.18.orig/fs/jbd2/checkpoint.c	2016-04-26 14:27:16.619928862 +0200
-+++ linux-3.18/fs/jbd2/checkpoint.c	2016-04-26 14:33:07.216586537 +0200
-@@ -316,8 +316,10 @@
+--- linux-4.5.orig/fs/jbd2/checkpoint.c	2016-04-27 15:37:09.212438464 +0200
++++ linux-4.5/fs/jbd2/checkpoint.c	2016-04-27 18:47:13.075220349 +0200
+@@ -316,8 +316,11 @@
  		unlock_and_flush:
  			spin_unlock(&journal->j_list_lock);
  		retry:
 -			if (batch_count)
 +			if (batch_count) {
-+				printk("yangsuli: journal checkpoint process submit %d blocks\n", batch_count);
++				fs_info(fsdev, "yangsuli: journal checkpoint process submit %d blocks\n",
++						batch_count);
  				__flush_batch(journal, &batch_count);
 +			}
  			spin_lock(&journal->j_list_lock);
