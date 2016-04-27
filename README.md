@@ -122,4 +122,4 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 4.0 - Seems like somebody did some copy-pasting in fs/xfs/xfs_inode.c, pasted yangsuli *comment* in both places. Otherwise straightforward. Compiles. Not tested.
 * 4.1 - Seemed straightforward. Compiles. Not tested.
 * 4.2 - Seemed straightforward. Had a problem with INIT_TASK() in init/init_task.c. Solved by putting causes and account_id in task_struct of include/linux/sched.h, where it belongs. Code got there because they moved a few lines where the patch relied on. Compiles. Not tested.
-* 4.3 - Seemed straightforward. Not tested.
+* 4.3 - Seemed straightforward. Compiles. Not tested.
