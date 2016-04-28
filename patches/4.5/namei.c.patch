@@ -1,7 +1,7 @@
 Index: linux-4.5/fs/namei.c
 ===================================================================
 --- linux-4.5.orig/fs/namei.c	2016-04-27 15:37:09.865771780 +0200
-+++ linux-4.5/fs/namei.c	2016-04-27 17:08:45.479552307 +0200
++++ linux-4.5/fs/namei.c	2016-04-27 17:09:09.769551427 +0200
 @@ -15,6 +15,7 @@
   */
  
@@ -82,7 +82,7 @@ Index: linux-4.5/fs/namei.c
 +	struct module *module;
 +	void *opaque = NULL;
 +
-+	/* it's ok to check permission upfront before queuing since no I/O is
++	/* It's ok to check permission upfront before queuing since no I/O is
 +	 * performed
 +	 */
  	int error = may_create(dir, dentry);

@@ -20,7 +20,6 @@ file.c.patch
 filemap.c.patch
 fs.h.patch
 fs-inode.c.patch
-fsync.c.patch
 hrtimer.c.patch
 init_task.h.patch
 jbd2.h.patch

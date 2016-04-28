@@ -35,7 +35,7 @@ make -j`nproc`
 ##make modules -j`nproc`
 #sudo make modules_install
 #sudo make install
-fake_root make-kpkg -j`nproc` --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
+fakeroot make-kpkg -j`nproc` --initrd --append-to-version=-split-level-io --revision=1 kernel_image kernel_headers
 sudo dpkg -i ../*-split-level-io*1*.deb
 sudo reboot
 ```
