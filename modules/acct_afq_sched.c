@@ -1210,6 +1210,7 @@ static int basic_sched_init_data(struct request_queue *q, struct elevator_type *
 
 	afq_data = kmalloc_node(sizeof(struct afq_data), GFP_KERNEL, q->node);
 	if(!afq_data){
+		kobject_put(&eq->kobj);
 		return -ENOMEM;
 	}
 	
@@ -1268,6 +1269,7 @@ fail1:
 	kfree(sim_batch);
 fail:
 	kfree(afq_data);
+	kobject_put(&eq->kobj);
 	return -ENOMEM; /* TODO: fix return int */
 }
 

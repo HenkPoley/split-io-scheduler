@@ -778,6 +778,7 @@ static int tbucket_init_queue(struct request_queue *q, struct elevator_type *e)
 		kfree(td);
 		kfree(default_account);
 		kfree(batch);
+		kobject_put(&eq->kobj);
 		return -ENOMEM;
 	}
 
