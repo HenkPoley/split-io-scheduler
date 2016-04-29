@@ -45,10 +45,10 @@
 #define ANTICIPATION_US (10000) // don't set this to >1s!
 #define RUN_SIZE_LIMIT (10*MB)
 
-#define RQ_CAUSES(rq) (rq)->elevator_private[0]
-#define RQ_CAUSES_CAST(rq) ((struct cause_list *)(rq)->elevator_private[0])
-#define RQ_QUEUE(rq) (rq)->elevator_private[1]
-#define RQ_QUEUE_CAST(rq) ((struct queue *)(rq)->elevator_private[1])
+#define RQ_CAUSES(rq) (rq)->elv.priv[0]
+#define RQ_CAUSES_CAST(rq) ((struct cause_list *)(rq)->elv.priv[0])
+#define RQ_QUEUE(rq) (rq)->elv.priv[1]
+#define RQ_QUEUE_CAST(rq) ((struct queue *)(rq)->elv.priv[1])
 
 struct tbucket_data {
 	struct request_queue *q;
@@ -178,11 +178,10 @@ static void add_account(struct tbucket_data* td,
 static struct account *get_account(struct tbucket_data* td,
 								   int account_id) {
 	struct account *account;
-	struct hlist_node *tmp;
 
 	// search existing accounts
 	hash_for_each_possible(td->accounts_hash, account,
-						   tmp, node, account_id) {
+						   node, account_id) {
 		if (account->id == account_id)
 			return account;
 	}
@@ -196,7 +195,7 @@ static struct account *get_account(struct tbucket_data* td,
 
 	// use default account
 	hash_for_each_possible(td->accounts_hash, account,
-						   tmp, node, DEFAULT_ACCOUNT) {
+						   node, DEFAULT_ACCOUNT) {
 		if (account->id == DEFAULT_ACCOUNT)
 			return account;
 	}
@@ -479,7 +478,7 @@ static void account_for_bio(struct tbucket_data *td,
 							struct request *rq,
 							struct bio *bio) {
 	struct cause_list* causes;
-	off_t offset = bio->bi_sector * (off_t)512;
+	off_t offset = bio->bi_iter.bi_sector * (off_t)512;
 	int i;
 
 	if (bio->cll && bio->cll->uniq_causes->item_count) {
@@ -489,16 +488,16 @@ static void account_for_bio(struct tbucket_data *td,
 			offset += causes->size;
 		}
 	} else if (RQ_CAUSES(rq)) {
-		account_for_causes(td, RQ_CAUSES_CAST(rq), offset, bio->bi_size);
+		account_for_causes(td, RQ_CAUSES_CAST(rq), offset, bio->bi_iter.bi_size);
 	} else {
 		WARN_ON("nobody charged!");
 	}
 
 	// stats
 	if (rq_data_dir(rq) == WRITE)
-		td->stats.disk_writes += bio->bi_size;
+		td->stats.disk_writes += bio->bi_iter.bi_size;
 	else
-		td->stats.disk_reads += bio->bi_size;
+		td->stats.disk_reads += bio->bi_iter.bi_size;
 }
 
 static void account_for_req(struct tbucket_data *td,
@@ -635,8 +634,12 @@ switch_queue:
 	return 0;
 }
 
-static int tbucket_set_request(struct request_queue *q,
-							   struct request *rq, gfp_t gfp_mask) {
+/* typedef int (elevator_set_req_fn) (struct request_queue *, struct request *,
+ *				   struct bio *, gfp_t);
+ * TODO: That the struct bio *bio is passed in here now, probably means we need
+ *   to do something with it.. */
+static int tbucket_set_request(struct request_queue *q, struct request *rq,
+					struct bio *bio, gfp_t gfp_mask) {
 	RQ_CAUSES(rq) = new_cause_list();
 	return 0;
 }
@@ -671,10 +674,10 @@ static int request_sanity_check(struct request *rq) {
 				cl_count++;
 				cl_bytes += causes->size;
 			}
-			WARN_ON2(bio->cll->size != bio->bi_size);
-			if(bio->cll->size != bio->bi_size) {
+			WARN_ON2(bio->cll->size != bio->bi_iter.bi_size);
+			if(bio->cll->size != bio->bi_iter.bi_size) {
 				printk(KERN_INFO "mismatch %ld != %d (%d)",
-					   bio->cll->size, bio->bi_size,
+					   bio->cll->size, bio->bi_iter.bi_size,
 					   bio->cll->item_count);
 			}
 			WARN_ON2(cl_count != bio->cll->item_count);
@@ -751,12 +754,21 @@ static void tbucket_kv_set(struct request_queue *q,
 	spin_unlock_irq(q->queue_lock);
 }
 
-static void *tbucket_init_queue(struct request_queue *q) {
+/* typedef int (elevator_init_fn) (struct request_queue *,
+ * 				struct elevator_type *e);
+ * See also: block/cfq-iosched.c */
+static int tbucket_init_queue(struct request_queue *q, struct elevator_type *e)
+{
+	struct elevator_queue *eq;
 	struct tbucket_data *td = NULL;
 	struct account *default_account = NULL;
 	struct io_batch *batch = NULL;
 
 	// allocs
+	eq = elevator_alloc(q, e);
+	if (!eq)
+		return -ENOMEM;
+
 	td = kmalloc_node(sizeof(*td), GFP_KERNEL, q->node);
 	default_account = new_account(DEFAULT_ACCOUNT);
 	batch = iobatch_new(BATCH_SIZE, BATCH_BYTE_CAP);
@@ -766,7 +778,7 @@ static void *tbucket_init_queue(struct request_queue *q) {
 		kfree(td);
 		kfree(default_account);
 		kfree(batch);
-		return NULL;
+		return -ENOMEM;
 	}
 
 	// init td
@@ -777,11 +789,18 @@ static void *tbucket_init_queue(struct request_queue *q) {
 	INIT_LIST_HEAD(&td->queues);
 	td->batch = batch;
 
+	eq->elevator_data = td;
+
 	add_account(td, default_account);
-	setup_timer(&td->dispatch_nudger, dispatch_nudge,(unsigned long)q);
+
+	spin_lock_irq(q->queue_lock);
+	q->elevator = eq;
+	spin_unlock_irq(q->queue_lock);
+
+	setup_timer(&td->dispatch_nudger, dispatch_nudge, (unsigned long) q);
 	ioctl_helper_register_disk(q, tbucket_kv_set);
 
-	return td;
+	return 0;
 }
 
 static void tbucket_exit_queue(struct elevator_queue *e) {

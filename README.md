@@ -131,6 +131,7 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 4.4 - Seemed straightforward. Compiles. Not tested.
 * 4.5 - Seemed straightforward. Compiles. Kernel boots. Modules fail to build.
 * Ran scripts/checkpatch.pl, cleaned up remarks
+* Adapted tbucket.c for Linux v4.5. (struct queue)->elevator_private becomes (struct queue)->elv.priv, bio->bi_size become bio->bi_iter.bi_size, account_for_causes() no longer needs a temp variable. an elevator_init_fn() needs to allocate an elevator and store its variables in there, and not return a pointer but an integer success/error value. tb-iosched.ko now insmods and "does something".
 
 ## Missing code verification
 
@@ -175,6 +176,6 @@ Check if 3.2.51 and 4.5 have similar code in similar places.
 * super.c - check
 * sync.c - check
 * transaction.c - removed SPLIT_NODEP. Removed commented code. check
-* xfs_aops.c - check. Removed path.
+* xfs_aops.c - check. Removed patch.
 * xfs_inode.c - just comments. check. Removed patch
 * xfs_vnodeops.c - removed patch. just comments.

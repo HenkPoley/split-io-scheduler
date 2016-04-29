@@ -1,8 +1,8 @@
 Index: linux-4.5/block/cause_tags.c
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ linux-4.5/block/cause_tags.c	2016-04-27 19:41:41.638435622 +0200
-@@ -0,0 +1,398 @@
++++ linux-4.5/block/cause_tags.c	2016-04-29 10:28:25.267524000 +0200
+@@ -0,0 +1,399 @@
 +#include <linux/slab.h>
 +#include <linux/sched.h>
 +#include <linux/cause_tags.h>
@@ -304,6 +304,7 @@ Index: linux-4.5/block/cause_tags.c
 +		if (!bio->cll)
 +			bio->cll = new_cause_list_list(max_pages_per_bio);
 +
++		/* Backtrace if there are no causes logged */
 +		WARN_ON(bh->causes->item_count == 0 &&
 +				bh->causes->type != SPLIT_JOURNAL);
 +
