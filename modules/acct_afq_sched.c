@@ -141,7 +141,6 @@ inline int prio_to_stride(int prio){
 static void add_vio_counter(struct afq_data *afq_data, struct account *acct, int quantity){
 	int stride;
 	int bkt;
-	struct hlist_node *cur;
 	struct account *cur_acct;
 	
 	//stride = acct->ioprio;
@@ -157,7 +156,7 @@ static void add_vio_counter(struct afq_data *afq_data, struct account *acct, int
 	}
 
 	if(acct->vio_counter > MAX_VIO_COUNTER_THRESHOLD){
-		acct_hash_for_each(&afq_data->acct_hash, bkt, cur, cur_acct, node){
+		acct_hash_for_each(&afq_data->acct_hash, bkt, cur_acct, node){
 			cur_acct->vio_counter = 0;
 			cur_acct->vio_reset++;
 		}
@@ -244,7 +243,6 @@ static void do_disk_accounting(struct afq_data *afq_data,
 	int ret;
 	int full = 0;
 	int bkt;
-	struct hlist_node *cur;
 	int causes_cost = causes_get_cost(causes);
 
 	if (causes_cost <= 0)
@@ -268,11 +266,11 @@ static void do_disk_accounting(struct afq_data *afq_data,
 		iobatch_clear(afq_data->sim_batch);
 
 		summed_cost = 0;
-		acct_hash_for_each(&afq_data->acct_hash, bkt, cur, account, node){
+		acct_hash_for_each(&afq_data->acct_hash, bkt, account, node){
 			summed_cost += iobatch_get_cost(account->sim_batch);
 		}
 		
-		acct_hash_for_each(&afq_data->acct_hash, bkt, cur, account, node){
+		acct_hash_for_each(&afq_data->acct_hash, bkt, account, node){
 			basic_charge = iobatch_get_cost(account->sim_batch);
 			adjusted_charge = safe_div(combined_cost * basic_charge, summed_cost);
 			if(adjusted_charge){
@@ -328,7 +326,7 @@ static void account_for_bio(struct afq_data *afq_data, struct request *rq, struc
 	struct cause_list *causes;
 	struct io_cause *cause;
 	struct account *account;
-	off_t offset = bio->bi_sector * (off_t)512;
+	off_t offset = bio->bi_iter.bi_sector * (off_t)512;
 	int i;
 
 	if(bio->cll && bio->cll->uniq_causes->item_count){
@@ -343,7 +341,7 @@ static void account_for_bio(struct afq_data *afq_data, struct request *rq, struc
 		}
 	}else if (RQ_CAUSES(rq)){
 		causes = RQ_CAUSES_CAST(rq);
-		account_for_causes(afq_data, RQ_CAUSES_CAST(rq), offset, bio->bi_size);
+		account_for_causes(afq_data, RQ_CAUSES_CAST(rq), offset, bio->bi_iter.bi_size);
 		list_for_each_entry(cause, &causes->items, list){
 			account = get_account(&afq_data->acct_hash, cause->account_id);
 			afq_accout_pos_seq_update(afq_data, account, rq);
@@ -483,7 +481,7 @@ static void cause_list_size_stat2(struct afq_data* afq_data, struct request *rq)
 
 
 static void basic_sched_add_request(struct request_queue *q, struct request *rq){
-	struct req_desc *req_desc = rq->elevator_private[0];
+	struct req_desc *req_desc = rq->elv.priv[0];
 	struct afq_data *afq_data = q->elevator->elevator_data;
 
 	cause_list_size_stat2(afq_data, rq);
@@ -515,7 +513,7 @@ static void basic_sched_merged_request(struct request_queue *q, struct request *
 
 static void basic_sched_complte_request(struct request_queue *q, struct request *rq){
 	struct afq_data *afq_data = q->elevator->elevator_data;
-	struct req_desc *req_desc = rq->elevator_private[0];
+	struct req_desc *req_desc = rq->elv.priv[0];
 
 	atomic_dec(&afq_data->inflight);
 	//printk("decrease inflight in basic_sched_complte_request, now %d\n", atomic_read(&afq_data->inflight));
@@ -1100,12 +1098,11 @@ int sched_thread_func(void *arg){
 
 void update_active_min(struct afq_data* afq_data){
 	int bkt;
-	struct hlist_node *cur;
 	struct account *cur_acct;
 	long min_vio_counter = MAX_VIO_COUNTER_THRESHOLD;
 	struct account *min_acct = NULL;
 
-	acct_hash_for_each(&afq_data->acct_hash, bkt, cur, cur_acct, node){
+	acct_hash_for_each(&afq_data->acct_hash, bkt, cur_acct, node){
 		if(cur_acct->account_id && time_before(jiffies, cur_acct->last_end_request + ACCT_MAX_SLEEP_TIME/15) && cur_acct->vio_counter < min_vio_counter){
 			min_vio_counter = cur_acct->vio_counter;
 			min_acct = cur_acct;
@@ -1196,16 +1193,27 @@ void stop_min_thread(struct afq_data *afq_data){
 	kthread_stop(afq_data->min_thread);
 }
 
-static void *basic_sched_init_data(struct request_queue *q){
+/* typedef int (elevator_init_fn) (struct request_queue *,
+ * 				struct elevator_type *e);
+ * See also: block/cfq-iosched.c */
+static int basic_sched_init_data(struct request_queue *q, struct elevator_type *e)
+{
+	struct elevator_queue *eq;
 	struct afq_data *afq_data;
 	int ret = 0;
 	int i;
 	struct io_batch *sim_batch = NULL;
+	
+	eq = elevator_alloc(q, e);
+	if (!eq)
+		return -ENOMEM;
 
 	afq_data = kmalloc_node(sizeof(struct afq_data), GFP_KERNEL, q->node);
 	if(!afq_data){
-		return NULL;
+		return -ENOMEM;
 	}
+	
+	eq->elevator_data = afq_data;
 
 	afq_data->queue = q;
 	init_acct_hash(&afq_data->acct_hash);
@@ -1236,6 +1244,10 @@ static void *basic_sched_init_data(struct request_queue *q){
 		afq_data->caust_count_dist[i] = 0;
 		afq_data->journal_cct[i] = 0;
 	}
+	
+	spin_lock_irq(q->queue_lock);
+	q->elevator = eq;
+	spin_unlock_irq(q->queue_lock);
 
 	ret = start_sched_thread(afq_data);
 	if(ret != 0){
@@ -1248,7 +1260,7 @@ static void *basic_sched_init_data(struct request_queue *q){
 	}
 
 	ioctl_helper_register_disk(q, basic_kv_set_callback);
-	return afq_data;
+	return 0;
 
 fail2:
 	stop_sched_thread(afq_data);
@@ -1256,7 +1268,7 @@ fail1:
 	kfree(sim_batch);
 fail:
 	kfree(afq_data);
-	return NULL;
+	return -ENOMEM; /* TODO: fix return int */
 }
 
 static void basic_sched_exit_data(struct elevator_queue *e){

@@ -6,8 +6,8 @@
 #include <linux/rbtree.h>
 #include <linux/cause_tags.h>
 
-#define RQ_CAUSES(rq) (rq)->elevator_private[1]
-#define RQ_CAUSES_CAST(rq) ((struct cause_list *)(rq)->elevator_private[1])
+#define RQ_CAUSES(rq) (rq)->elv.priv[1]
+#define RQ_CAUSES_CAST(rq) ((struct cause_list *)(rq)->elv.priv[1])
 
 /*
  * supported I/O related syscall and block level requests for scheduling
@@ -106,7 +106,7 @@ void put_mkdir_desc(struct mkdir_desc *mkdir_desc);
 struct req_desc *get_req_desc(struct request_queue *q, struct request *rq, gfp_t gfp_mask);
 void put_req_desc(struct req_desc* req_desc);
 
-
-int split_set_request(struct request_queue *q, struct request *rq, gfp_t gfp_mask);
+int split_set_request(struct request_queue *q, struct request *rq,
+				struct bio *bio, gfp_t gfp_mask);
 void split_put_request(struct request *rq);
 #endif

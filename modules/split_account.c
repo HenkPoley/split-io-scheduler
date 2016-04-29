@@ -51,7 +51,6 @@ fail:
 //queue lock must be held!
 struct account *get_account(struct acct_hash *acct_hash, int account_id) {
 	struct account *account = NULL;
-	struct hlist_node *tmp;
 
 	/*
 	if (account_id == 0)
@@ -59,7 +58,7 @@ struct account *get_account(struct acct_hash *acct_hash, int account_id) {
 	*/ 
 
 	hash_for_each_possible(acct_hash->accounts, account,
-			tmp, node, account_id) {
+			node, account_id) {
 		if (account->account_id == account_id)
 			goto found;
 	}
@@ -80,9 +79,9 @@ int get_account_id(struct task_struct* tsk) {
 
 void print_accounts_stat(struct acct_hash* acct_hash){
 	int bkt;
-	struct hlist_node *cur, *tmp;
+	struct hlist_node *cur;
 	struct account *account;
-	hash_for_each_safe(acct_hash->accounts, bkt, cur, tmp, account, node){
+	hash_for_each_safe(acct_hash->accounts, bkt, cur, account, node){
 		printk("account_id %d prio %d vio_counter %ld "
 			"num_read_req %d num_write_req %d "
 			"num_write_call %d num_write_passed %d num_write_blocked %d "
@@ -98,9 +97,9 @@ void print_accounts_stat(struct acct_hash* acct_hash){
 
 void free_accounts(struct acct_hash* acct_hash){
 	int bkt;
-	struct hlist_node *cur, *tmp;
+	struct hlist_node *cur;
 	struct account *account;
-	hash_for_each_safe(acct_hash->accounts, bkt, cur, tmp, account, node){
+	hash_for_each_safe(acct_hash->accounts, bkt, cur, account, node){
 		hash_del(&account->node);
 		kfree(account);
 	}

@@ -46,7 +46,11 @@ The modules/ directory contains the kernel module sources of the actual schedule
 ```
 cd modules
 make
-make insert (inserts just afq as example)
+#make insert (inserts just afq as example)
+sudo insmod ./tb-iosched.ko
+sudo insmod ./acct-afq-iosched.ko
+cat /sys/block/sdb/queue/scheduler (should show extra 'tb' & 'afq' items)
+echo afq | sudo tee /sys/block/sdb/queue/scheduler
 ```
 
 After initial compilation, if you updated some code in the kernel:
@@ -131,7 +135,8 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * 4.4 - Seemed straightforward. Compiles. Not tested.
 * 4.5 - Seemed straightforward. Compiles. Kernel boots. Modules fail to build.
 * Ran scripts/checkpatch.pl, cleaned up remarks
-* Adapted tbucket.c for Linux v4.5. (struct queue)->elevator_private becomes (struct queue)->elv.priv, bio->bi_size become bio->bi_iter.bi_size, account_for_causes() no longer needs a temp variable. an elevator_init_fn() needs to allocate an elevator and store its variables in there, and not return a pointer but an integer success/error value. tb-iosched.ko now insmods and "does something".
+* Adapted tbucket.c for Linux v4.5. (struct queue)->elevator_private becomes (struct queue)->elv.priv, bio->bi_size become bio->bi_iter.bi_size, account_for_causes() no longer needs a temp variable. an elevator_init_fn() needs to allocate an elevator and store its variables in there, and not return a pointer but an integer success/error value. tb-iosched.ko now insmods and "does something". But if you switch to it, after a while the kernel hangs, during a "make clean; make bzImage -j4".
+* Same fixes applied to acct_afq_sched.c, split_account.{c,h}, split_sched.{c,h}. The module acct-afq-iosched.ko now inserts. And when you switch a block device to it, a kernel compile does not hang the system (very long..) as happened with tbucket.
 
 ## Missing code verification
 

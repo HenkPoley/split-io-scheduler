@@ -139,8 +139,13 @@ void put_req_desc(struct req_desc* req_desc){
 	kfree(req_desc);
 }
 
-
-int split_set_request(struct request_queue *q, struct request *rq, gfp_t gfp_mask){
+/* typedef int (elevator_set_req_fn) (struct request_queue *, struct request *,
+ *				   struct bio *, gfp_t);
+ * TODO: That the struct bio *bio is passed in here now, probably means we need
+ *   to do something with it.. */
+int split_set_request(struct request_queue *q, struct request *rq,
+				struct bio *bio, gfp_t gfp_mask)
+{
 	struct req_desc *req_desc = NULL;
 
 	req_desc = get_req_desc(q, rq, gfp_mask);
@@ -148,7 +153,7 @@ int split_set_request(struct request_queue *q, struct request *rq, gfp_t gfp_mas
 		printk("get req_desc failed with error %lu!\n", PTR_ERR(req_desc));
 		return 1;
 	}
-	rq->elevator_private[0] = req_desc;
+	rq->elv.priv[0] = req_desc;
 
 	RQ_CAUSES(rq) = new_cause_list();
 
@@ -157,10 +162,10 @@ int split_set_request(struct request_queue *q, struct request *rq, gfp_t gfp_mas
 
 
 void split_put_request(struct request *rq){
-	struct req_desc *req_desc = rq->elevator_private[0];
+	struct req_desc *req_desc = rq->elv.priv[0];
 	put_req_desc(req_desc);
 
-	rq->elevator_private[0] = NULL;
+	rq->elv.priv[0] = NULL;
 	put_cause_list_safe((struct cause_list *)RQ_CAUSES(rq));
 }
 

@@ -57,5 +57,5 @@ int get_account_id(struct task_struct* tsk);
 void print_accounts_stat(struct acct_hash* acct_hash);
 void free_accounts(struct acct_hash* acct_hash);
 
-#define acct_hash_for_each(name, bkt, node, obj, member)	\
-	hash_for_each((name)->accounts, bkt, node, obj, member)
+#define acct_hash_for_each(name, bkt, obj, member)	\
+	hash_for_each((name)->accounts, bkt, obj, member)
