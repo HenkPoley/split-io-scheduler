@@ -137,6 +137,7 @@ Be sure to note that the "Does it compile?" test does not mean it actually works
 * Ran scripts/checkpatch.pl, cleaned up remarks
 * Adapted tbucket.c for Linux v4.5. (struct queue)->elevator_private becomes (struct queue)->elv.priv, bio->bi_size become bio->bi_iter.bi_size, account_for_causes() no longer needs a temp variable. an elevator_init_fn() needs to allocate an elevator and store its variables in there, and not return a pointer but an integer success/error value. tb-iosched.ko now insmods and "does something". But if you switch to it, after a while the kernel hangs, during a "make clean; make bzImage -j4".
 * Same fixes applied to acct_afq_sched.c, split_account.{c,h}, split_sched.{c,h}. The module acct-afq-iosched.ko now inserts. And when you switch a block device to it, a kernel compile does not hang the system (very long..) as happened with tbucket.
+* Also fixed up expire_rb.c and split_deadline_sched.c, so split-deadline-iosched.ko compiles again. Untested. Loads with Call Trace in `dmesg`, because it doesn't get a good result from ioctl_helper_init(IOCTL_MAJOR) in deadline_init(). It wasn't properly defined in the Makefile. I don't think it ought to work.
 
 ## Missing code verification
 

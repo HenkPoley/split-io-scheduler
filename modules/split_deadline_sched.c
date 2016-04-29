@@ -17,6 +17,8 @@
 #include <linux/delay.h>
 #include <linux/random.h>
 #include <linux/kthread.h>
+#include <linux/writeback.h>
+#include <linux/backing-dev.h>
 
 #include "split_account.h"
 #include "split_sched.h"
@@ -214,7 +216,8 @@ deadline_add_request(struct request_queue *q, struct request *rq)
 	/*
 	 * set expire time and add to fifo list
 	 */
-	rq_set_fifo_time(rq, jiffies + dd->fifo_expire[data_dir]);
+	((rq)->csd.llist.next = (void *) (jiffies + dd->fifo_expire[data_dir]));
+
 	list_add_tail(&rq->queuelist, &dd->fifo_list[data_dir]);
 }
 
@@ -240,7 +243,7 @@ deadline_merge(struct request_queue *q, struct request **req, struct bio *bio)
 	 * check for front merge
 	 */
 	if (dd->front_merges) {
-		sector_t sector = bio->bi_sector + bio_sectors(bio);
+		sector_t sector = bio->bi_iter.bi_sector + bio_sectors(bio);
 
 		__rq = elv_rb_find(&dd->sort_list[bio_data_dir(bio)], sector);
 		if (__rq) {
@@ -282,9 +285,11 @@ deadline_merged_requests(struct request_queue *q, struct request *req,
 	 * and move into next position (next will be deleted) in fifo
 	 */
 	if (!list_empty(&req->queuelist) && !list_empty(&next->queuelist)) {
-		if (time_before(rq_fifo_time(next), rq_fifo_time(req))) {
+		if (
+			time_before(((unsigned long) (next)->csd.llist.next), 
+				((unsigned long) (req)->csd.llist.next))) {
 			list_move(&req->queuelist, &next->queuelist);
-			rq_set_fifo_time(req, rq_fifo_time(next));
+			((req)->csd.llist.next = (void *) (((unsigned long) (next)->csd.llist.next)));
 		}
 	}
 
@@ -366,12 +371,13 @@ static inline int deadline_check_fifo(struct deadline_data *dd, int ddir)
 	/*
 	 * rq is expired!
 	 */
-	if (time_after(jiffies, rq_fifo_time(rq)))
+	if (time_after(jiffies, ((unsigned long) (rq)->csd.llist.next)))
 		return 1;
 
 	return 0;
 }
 
+/*
 ssize_t deadline_write_entry(struct request_queue *rq, struct file *file, size_t count, loff_t *pos, void** opaque, int sched_uniq){
 	struct wrdesc *wrdesc = NULL;
 	struct deadline_data *dd = rq->elevator->elevator_data;
@@ -435,7 +441,7 @@ ssize_t deadline_write_entry(struct request_queue *rq, struct file *file, size_t
 	}
 	do_gettimeofday(&wb_end);
 	if(get_time_diff(&wb_end, &wb_start) >= 10){
-	printk("write of file %s waiting writeback took %d ms\n", file->f_dentry->d_name.name, get_time_diff(&wb_end, &wb_start));
+		printk("write of file %s waiting writeback took %d ms\n", file->f_dentry->d_name.name, get_time_diff(&wb_end, &wb_start));
 	}
 
 	do_gettimeofday(&wrdesc->w_time);
@@ -444,9 +450,9 @@ ssize_t deadline_write_entry(struct request_queue *rq, struct file *file, size_t
 
 	return 0;
 }
+*/
 
-
-
+/*
 void deadline_write_return(struct request_queue *q, void *opaque, ssize_t rv, int sched_uniq){
 	struct wrdesc *wrdesc = opaque;
 	struct timeval now;
@@ -462,6 +468,7 @@ void deadline_write_return(struct request_queue *q, void *opaque, ssize_t rv, in
 	put_wrdesc(wrdesc);
 	blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
 }
+*/
 
 
 int deadline_fsync_entry(struct request_queue *rq, struct file* file, int datasync, void **opaque, int sched_uniq){
@@ -511,7 +518,7 @@ int deadline_fsync_entry(struct request_queue *rq, struct file* file, int datasy
 	inode = file->f_mapping->host;
 	num_dirty_pages = inode_get_dirty_pages(inode);
 	if(num_dirty_pages >= 200)
-		printk("fsync on file %s called with dirty pages %d\n", file->f_dentry->d_name.name, num_dirty_pages);
+		printk("fsync on file %s called with dirty pages %d\n", file->f_path.dentry->d_name.name, num_dirty_pages);
 
 	if(need_wb){
 	do_gettimeofday(&wb_start);
@@ -552,7 +559,7 @@ void deadline_fsync_return(struct request_queue *q, void *opaque, int rv, int sc
 	do_gettimeofday(&now);
 	
 	if(get_time_diff(&now, &fsync_desc->f_time) >= 10 || (fsync_desc->acct && fsync_desc->acct->fsync_expire == 200)){
-	printk("fsync on file %s took %d ms (fsync_expire %d)\n", fsync_desc->f_file->f_dentry->d_name.name, get_time_diff(&now, &fsync_desc->f_time), fsync_desc->acct==NULL?-1:fsync_desc->acct->fsync_expire);
+	printk("fsync on file %s took %d ms (fsync_expire %d)\n", fsync_desc->f_file->f_path.dentry->d_name.name, get_time_diff(&now, &fsync_desc->f_time), fsync_desc->acct==NULL?-1:fsync_desc->acct->fsync_expire);
 	}
 	put_fsync_desc(fsync_desc);
 }
@@ -750,18 +757,28 @@ void stop_sched_thread(struct deadline_data *dd){
 	kthread_stop(dd->sched_thread);
 }
 
+/* typedef int (elevator_init_fn) (struct request_queue *,
+ * 				struct elevator_type *e);
+ * See also: block/cfq-iosched.c */
 /*
  * initialize elevator private data (deadline_data).
  */
-static void *deadline_init_queue(struct request_queue *q)
+static int deadline_init_queue(struct request_queue *q, struct elevator_type *e)
 {
+	struct elevator_queue *eq;
 	struct deadline_data *dd;
 	int ret;
 
+	eq = elevator_alloc(q, e);
+	if (!eq)
+		return -ENOMEM;
+
 	dd = kmalloc_node(sizeof(*dd), GFP_KERNEL | __GFP_ZERO, q->node);
 	if (!dd)
-		return NULL;
+		return -ENOMEM;
 	dd->queue = q;
+	
+	eq->elevator_data = dd;
 
 	init_acct_hash(&dd->acct_hash);
 	get_random_bytes(&dd->magic, sizeof(dd->magic));
@@ -781,14 +798,18 @@ static void *deadline_init_queue(struct request_queue *q)
 	if(ret != 0){
 		goto fail;
 	}
+	
+	spin_lock_irq(q->queue_lock);
+	q->elevator = eq;
+	spin_unlock_irq(q->queue_lock);
 
 	ioctl_helper_register_disk(q, deadline_kv_set_callback);
 
-	return dd;
+	return 0;
 
 fail:
 	kfree(dd);
-	return NULL;
+	return -ENOMEM;
 }
 
 static void deadline_exit_queue(struct elevator_queue *e)

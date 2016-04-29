@@ -19,10 +19,10 @@ void expire_rb_add(struct rb_root *root, struct request *rq)
 	while (*p) {
 		parent = *p;
 		__rq = rb_entry(parent, struct request, expire_rb_node);
-
-		if (rq_fifo_time(rq) < rq_fifo_time(__rq))
+		if (((unsigned long) (rq)->csd.llist.next) < ((unsigned long) (__rq)->csd.llist.next))
 			p = &(*p)->rb_left;
-		else if (rq_fifo_time(rq) >= rq_fifo_time(__rq))
+
+		else if (((unsigned long) (rq)->csd.llist.next) >= ((unsigned long) (__rq)->csd.llist.next))
 			p = &(*p)->rb_right;
 	}
 
@@ -44,10 +44,10 @@ struct request *expire_rb_find(struct rb_root *root, unsigned long expire)
 
 	while(n){
 		rq = rb_entry(n, struct request, expire_rb_node);
-
-		if(expire < rq_fifo_time(rq))
+		if(expire < ((unsigned long) (rq)->csd.llist.next))
 			n = n->rb_left;
-		else if (expire > rq_fifo_time(rq))
+
+		else if (expire > ((unsigned long) (rq)->csd.llist.next))
 			n = n->rb_right;
 		else
 			return rq;
@@ -108,7 +108,7 @@ void dump_expire_rb_tree(struct rb_root *root){
 	printk("expire rb tree dump begins\n");
 
 	while(rq != NULL){
-		printk("rq %p expire time %lu\n", rq, rq_fifo_time(rq));
+		printk("rq %p expire time %lu\n", rq, ((unsigned long) (rq)->csd.llist.next));
 		rq = expire_rb_next_request(rq);
 	}
 

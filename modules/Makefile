@@ -1,4 +1,4 @@
-obj-m := tb-iosched.o acct-afq-iosched.o
+obj-m := tb-iosched.o acct-afq-iosched.o split-deadline-iosched.o
 
 acct-afq-iosched-objs := acct_afq_sched.o split_sched.o split_account.o ioctl_helper.o io_batch.o disk_sim.o
 split-deadline-iosched-objs := split_deadline_sched.o split_account.o split_sched.o ioctl_helper.o expire_rb.o io_work_expire_rb.o io_batch.o disk_sim.o
